@@ -2,16 +2,25 @@
 Django settings for IT HubPro — учёт проектов и финансов IT-компании.
 """
 
+import os
 from datetime import timedelta
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-m-%!udn)qv3^-p-jjotyy*vw&parhcpl218#2tek*=x%qubt$2'
+# --- Управление через переменные окружения (в dev остаются те же дефолты) ---
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-m-%!udn)qv3^-p-jjotyy*vw&parhcpl218#2tek*=x%qubt$2',
+)
 
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
+
+CSRF_TRUSTED_ORIGINS = [
+    o for o in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',') if o
+]
 
 
 INSTALLED_APPS = [
@@ -80,8 +89,15 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # сюда collectstatic собирает статику Django-админки
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Продакшн: за nginx c TLS ---
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 
 REST_FRAMEWORK = {
