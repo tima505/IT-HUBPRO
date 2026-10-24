@@ -45,7 +45,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import api, { money } from '../../api'
+import api, { money, errorMessage } from '../../api'
 import Modal from '../../components/Modal.vue'
 import Icon from '../../components/Icon.vue'
 
@@ -64,11 +64,11 @@ function openEdit(w) { editing.value = w; Object.assign(form, { full_name: w.ful
 async function save() {
   busy.value = true; error.value = ''
   try {
-    if (editing.value) await api.patch(`/workers/${editing.value.id}/`, form)
-    else await api.post('/workers/', form)
+    if (editing.value) await api.patch(`/workers/${editing.value.id}/`, form, { silentError: true })
+    else await api.post('/workers/', form, { silentError: true })
     show.value = false; await load()
   } catch (e) {
-    error.value = e.response?.data?.username?.[0] || 'Проверьте поля (логин должен быть уникальным)'
+    error.value = errorMessage(e, 'Проверьте поля (логин должен быть уникальным)')
   } finally { busy.value = false }
 }
 

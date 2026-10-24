@@ -1,17 +1,17 @@
 <template>
   <div>
     <div class="grid-4">
-      <StatCard class="animate-in d1" label="Всего поступлений" :value="fin.total_income" icon="trending-up" color="#2563eb" />
+      <StatCard class="animate-in d1" label="Всего поступлений" :value="fin.total_income" icon="trending-up" color="#6366f1" />
       <StatCard class="animate-in d2" label="Деньги компании" :value="fin.company?.balance" icon="bank" color="#059669" />
       <StatCard class="animate-in d3" :label="settings.fund1_name" :value="fin.fund20?.balance" icon="percent" color="#4f46e5" />
       <StatCard class="animate-in d4" :label="settings.fund2_name" :value="fin.fund5?.balance" icon="percent" color="#0284c7" />
     </div>
 
     <div class="grid-stats mt-24">
-      <StatCard class="animate-in d3" label="Выплаты рабочим" :value="fin.worker_payouts" icon="user" color="#d97706" />
-      <StatCard class="animate-in d4" label="Расходы на серверы" :value="fin.server_expense" icon="server" color="#dc2626" />
-      <StatCard class="animate-in d5" label="Активных проектов" :value="activeCount" icon="folder" color="#2563eb" :is-money="false" />
-      <StatCard class="animate-in d6" label="Рабочих в команде" :value="workersCount" icon="users" color="#4f46e5" :is-money="false" />
+      <router-link to="/debts" class="stat-link"><StatCard class="animate-in d3" label="Клиенты должны" :value="fin.clients_debt" icon="briefcase" color="#ef4444" /></router-link>
+      <router-link to="/debts" class="stat-link"><StatCard class="animate-in d4" label="Должны рабочим" :value="fin.workers_debt" icon="users" color="#d97706" /></router-link>
+      <StatCard class="animate-in d5" label="Выплачено рабочим" :value="fin.worker_payouts" icon="user" color="#0ea5e9" />
+      <StatCard class="animate-in d6" label="Активных проектов" :value="activeCount" icon="folder" color="#6366f1" :is-money="false" />
     </div>
 
     <div class="two-col mt-24">
@@ -27,7 +27,8 @@
               <td><b>{{ p.name }}</b></td>
               <td class="muted">{{ p.worker_name }}</td>
               <td>
-                <span v-if="p.has_stages" class="badge blue">Этапы</span>
+                <span v-if="Number(p.debt) > 0" class="badge red">долг {{ money(p.debt) }}</span>
+                <span v-else-if="Number(p.price) > 0" class="badge green">оплачен</span>
                 <span v-if="p.has_monthly" class="badge amber">Ежемесячно</span>
               </td>
               <td><StatusBadge :status="p.status" /></td>
@@ -64,23 +65,20 @@ import Icon from '../../components/Icon.vue'
 const fin = ref({})
 const settings = ref({ fund1_name: 'Фонд 20%', fund2_name: 'Фонд 5%' })
 const projects = ref([])
-const workersCount = ref(0)
 const due = ref([])
 
 const recent = computed(() => projects.value.slice(0, 6))
 const activeCount = computed(() => projects.value.filter(p => p.status === 'active').length)
 
 onMounted(async () => {
-  const [f, p, w, d, s] = await Promise.all([
+  const [f, p, d, s] = await Promise.all([
     api.get('/finance/'),
     api.get('/projects/'),
-    api.get('/workers/'),
     api.get('/projects/due_monthly/'),
     api.get('/settings/'),
   ])
   fin.value = f.data
   projects.value = p.data
-  workersCount.value = w.data.length
   due.value = d.data.slice(0, 6)
   settings.value = s.data
 })
@@ -88,8 +86,11 @@ onMounted(async () => {
 
 <style scoped>
 .grid-4, .grid-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.stat-link { display: block; }
+.stat-link :deep(.card) { height: 100%; transition: border-color .2s, transform .2s; }
+.stat-link:hover :deep(.card) { border-color: var(--stroke-strong); transform: translateY(-2px); }
 .two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
-.due-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.due-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--stroke); }
 .due-row:last-child { border-bottom: none; }
 @media (max-width: 1100px) { .grid-4, .grid-stats { grid-template-columns: repeat(2,1fr); } .two-col { grid-template-columns: 1fr; } }
 </style>

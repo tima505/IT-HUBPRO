@@ -2,27 +2,39 @@
 Модели IT HubPro.
 
 Финансовая логика (ключевое):
-  С каждого платежа по проекту:
-    • 20% суммы  -> фонд «20%»
-    • 5%  суммы  -> фонд «5%»
-    • доля рабочего = worker_percent% суммы  (только аванс и финальная оплата;
-      для ежемесячной оплаты доля рабочего не выделяется — договариваются сами)
-    • остаток -> деньги компании
-  Итого: company = amount - fund20 - fund5 - worker_share
+  У проекта одна цена. Клиент платит частями — каждая оплата сохраняется в
+  истории, остаток долга = цена − сумма оплат (переплатить нельзя).
+  С каждой оплаты:
+    • fund1_rate% -> фонд 1 (по умолчанию 20%)
+    • fund2_rate% -> фонд 2 (по умолчанию 5%)
+    • остаток     -> деньги компании
+  Ставки фондов фиксируются в платеже в момент поступления: смена настроек
+  не переписывает историю.
+
+  Рабочему: в проекте указано, сколько мы ему должны (worker_amount).
+  Выплаты рабочему записываются вручную (WorkerPayout) и списываются из
+  выбранной «корзины» (обычно деньги компании). Долг рабочему = должны − выплачено.
 """
+import calendar
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
 
+PERCENT_VALIDATORS = [MinValueValidator(Decimal('0')), MaxValueValidator(Decimal('100'))]
+
+
 class GlobalSettings(models.Model):
-    fund1_rate = models.DecimalField('Фонд 1 (%)', max_digits=5, decimal_places=2, default=Decimal('20.00'))
+    fund1_rate = models.DecimalField('Фонд 1 (%)', max_digits=5, decimal_places=2, default=Decimal('20.00'),
+                                     validators=PERCENT_VALIDATORS)
     fund1_name = models.CharField('Название Фонд 1', max_length=50, default='Фонд 20%')
-    
-    fund2_rate = models.DecimalField('Фонд 2 (%)', max_digits=5, decimal_places=2, default=Decimal('5.00'))
+
+    fund2_rate = models.DecimalField('Фонд 2 (%)', max_digits=5, decimal_places=2, default=Decimal('5.00'),
+                                     validators=PERCENT_VALIDATORS)
     fund2_name = models.CharField('Название Фонд 2', max_length=50, default='Фонд 5%')
 
     def save(self, *args, **kwargs):
@@ -40,13 +52,21 @@ def money(value) -> Decimal:
     return Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
-def add_months(d, months: int):
-    """Прибавить к дате N календарных месяцев."""
+def add_months(d, months: int, day: int | None = None):
+    """Прибавить к дате N календарных месяцев.
+
+    `day` — «якорный» день месяца (например, день старта проекта): 31.01 → 28.02 → 31.03,
+    без постепенного сползания на 28-е. Если день не существует в месяце — берётся последний.
+    """
     month = d.month - 1 + months
     year = d.year + month // 12
     month = month % 12 + 1
-    day = min(d.day, 28)  # безопасный день, чтобы не выйти за границы месяца
-    return d.replace(year=year, month=month, day=day)
+    last = calendar.monthrange(year, month)[1]
+    return d.replace(year=year, month=month, day=min(day or d.day, last))
+
+
+def is_month_end(d) -> bool:
+    return d.day == calendar.monthrange(d.year, d.month)[1]
 
 
 class User(AbstractUser):
@@ -84,13 +104,15 @@ class Project(models.Model):
         User, on_delete=models.PROTECT, related_name='projects',
         limit_choices_to={'role': User.Role.WORKER}, verbose_name='Рабочий',
     )
-    worker_beta_amount = models.DecimalField('Оплата рабочему (Бета)', max_digits=14, decimal_places=2, default=Decimal('0'))
-    worker_final_amount = models.DecimalField('Оплата рабочему (Сдача)', max_digits=14, decimal_places=2, default=Decimal('0'))
-    # Настройки оплаты
-    has_stages = models.BooleanField('Оплата по этапам', default=True)
-    start_amount = models.DecimalField('Сумма (Старт)', max_digits=14, decimal_places=2, null=True, blank=True)
-    beta_amount = models.DecimalField('Сумма (Бета)', max_digits=14, decimal_places=2, null=True, blank=True)
-    final_amount = models.DecimalField('Сумма (Сдача)', max_digits=14, decimal_places=2, null=True, blank=True)
+    description = models.TextField('Описание', blank=True)
+
+    # Клиент
+    client_name = models.CharField('Клиент', max_length=200, blank=True)
+    client_phone = models.CharField('Телефон клиента', max_length=30, blank=True)
+
+    # Деньги
+    price = models.DecimalField('Цена проекта', max_digits=14, decimal_places=2, default=Decimal('0'))
+    worker_amount = models.DecimalField('Должны рабочему', max_digits=14, decimal_places=2, default=Decimal('0'))
 
     has_monthly = models.BooleanField('Ежемесячная оплата', default=False)
     monthly_amount = models.DecimalField('Оплата в месяц', max_digits=14, decimal_places=2, null=True, blank=True)
@@ -112,10 +134,21 @@ class Project(models.Model):
         return self.name
 
     @property
-    def total_price(self) -> Decimal:
-        if not self.has_stages:
-            return Decimal('0.00')
-        return (self.start_amount or Decimal('0')) + (self.beta_amount or Decimal('0')) + (self.final_amount or Decimal('0'))
+    def paid(self) -> Decimal:
+        """Оплачено клиентом в счёт цены проекта (ежемесячные оплаты не входят)."""
+        return sum((p.amount for p in self.payments.all() if p.kind != PaymentKind.MONTHLY), Decimal('0'))
+
+    @property
+    def debt(self) -> Decimal:
+        return max(self.price - self.paid, Decimal('0'))
+
+    @property
+    def worker_paid(self) -> Decimal:
+        return sum((p.amount for p in self.payouts.all()), Decimal('0'))
+
+    @property
+    def worker_debt(self) -> Decimal:
+        return max(self.worker_amount - self.worker_paid, Decimal('0'))
 
     def deadline_status(self) -> dict:
         """Сравнение фактической сдачи (или сегодня) с дедлайном.
@@ -135,6 +168,13 @@ class Project(models.Model):
         state = 'pending' if diff >= 0 else 'overdue'
         return {'finished': False, 'state': state, 'days': abs(diff), 'deadline_date': dl}
 
+    def next_monthly_due(self):
+        """Следующая дата ежемесячной оплаты после текущей (якорь — день старта проекта)."""
+        base = self.monthly_next_due or self.start_date
+        # если текущая дата «прижата» к концу короткого месяца — возвращаемся к дню старта
+        day = max(base.day, self.start_date.day) if is_month_end(base) else base.day
+        return add_months(base, 1, day=day)
+
     def save(self, *args, **kwargs):
         if self.has_monthly and self.monthly_next_due is None:
             self.monthly_next_due = self.start_date
@@ -142,23 +182,30 @@ class Project(models.Model):
 
 
 class PaymentKind(models.TextChoices):
+    PAYMENT = 'payment', 'Оплата'
+    MONTHLY = 'monthly', 'Ежемесячная оплата'
+    # этапы из прежней схемы оплаты — только для истории старых платежей
     START = 'start', 'Старт'
     BETA = 'beta', 'Бета'
     FINAL = 'final', 'Сдача'
-    MONTHLY = 'monthly', 'Ежемесячная оплата'
 
 
 class Payment(models.Model):
-    """Поступление денег по проекту с автоматическим распределением."""
+    """Поступление денег от клиента с автоматическим распределением по фондам."""
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='payments')
-    kind = models.CharField(max_length=10, choices=PaymentKind.choices)
+    kind = models.CharField(max_length=10, choices=PaymentKind.choices, default=PaymentKind.PAYMENT)
     amount = models.DecimalField('Сумма', max_digits=14, decimal_places=2)
     date = models.DateField(default=timezone.localdate)
+    note = models.CharField('Комментарий', max_length=255, blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
 
-    # Распределение (считается автоматически при сохранении)
+    # Ставки фондов на момент поступления (снимок настроек)
+    fund1_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    fund2_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    # Распределение (считается автоматически при создании / изменении суммы)
     fund20_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     fund5_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
-    worker_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     company_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -166,33 +213,52 @@ class Payment(models.Model):
     class Meta:
         ordering = ['-date', '-id']
 
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        obj = super().from_db(db, field_names, values)
+        obj._original = obj.amount
+        return obj
+
     def distribute(self):
-        """Рассчитать распределение суммы по фондам, рабочему и компании."""
+        """Рассчитать распределение суммы по фондам и компании."""
+        if self.fund1_rate is None or self.fund2_rate is None:
+            settings = GlobalSettings.load()
+            self.fund1_rate = settings.fund1_rate
+            self.fund2_rate = settings.fund2_rate
+
         amount = money(self.amount)
-        settings = GlobalSettings.load()
-        fund20 = money(amount * (settings.fund1_rate / Decimal('100')))
-        fund5 = money(amount * (settings.fund2_rate / Decimal('100')))
-        remainder = amount - fund20 - fund5
-        
-        if self.kind == PaymentKind.BETA:
-            worker = money(self.project.worker_beta_amount)
-        elif self.kind == PaymentKind.FINAL:
-            worker = money(self.project.worker_final_amount)
-        else:
-            worker = Decimal('0.00')
-            
-        company = remainder - worker
-        self.fund20_amount = fund20
-        self.fund5_amount = fund5
-        self.worker_amount = worker
-        self.company_amount = company
+        self.fund20_amount = money(amount * (self.fund1_rate / Decimal('100')))
+        self.fund5_amount = money(amount * (self.fund2_rate / Decimal('100')))
+        self.company_amount = max(amount - self.fund20_amount - self.fund5_amount, Decimal('0.00'))
 
     def save(self, *args, **kwargs):
-        self.distribute()
+        # распределяем только новый платёж или при изменении суммы —
+        # смена настроек фондов не переписывает историю
+        if self._state.adding or getattr(self, '_original', None) != self.amount:
+            self.distribute()
         super().save(*args, **kwargs)
+        self._original = self.amount
 
     def __str__(self):
         return f'{self.get_kind_display()} — {self.amount} по «{self.project.name}»'
+
+
+class WorkerPayout(models.Model):
+    """Выплата рабочему по проекту (записывается вручную)."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='payouts')
+    worker = models.ForeignKey(User, on_delete=models.PROTECT, related_name='payouts', verbose_name='Рабочий')
+    amount = models.DecimalField('Сумма', max_digits=14, decimal_places=2)
+    date = models.DateField(default=timezone.localdate)
+    paid_from = models.CharField('Оплачено из', max_length=10, choices=Bucket.choices, default=Bucket.COMPANY)
+    note = models.CharField('Комментарий', max_length=255, blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date', '-id']
+
+    def __str__(self):
+        return f'{self.worker} — {self.amount} по «{self.project.name}»'
 
 
 class ServerStatus(models.TextChoices):
@@ -250,6 +316,7 @@ class Notification(models.Model):
     class Kind(models.TextChoices):
         SERVER = 'server', 'Сервер'
         PROJECT = 'project', 'Проект'
+        TASK = 'task', 'Задача'
 
     recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     kind = models.CharField(max_length=10, choices=Kind.choices)
@@ -261,3 +328,91 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+# --------------------------------------------------------------------------- #
+#  Задачи (канбан-доска)
+# --------------------------------------------------------------------------- #
+class TaskStatus(models.TextChoices):
+    TODO = 'todo', 'К выполнению'
+    IN_PROGRESS = 'in_progress', 'В работе'
+    REVIEW = 'review', 'На проверке'
+    DONE = 'done', 'Готово'
+
+
+class TaskPriority(models.TextChoices):
+    LOW = 'low', 'Низкий'
+    MEDIUM = 'medium', 'Средний'
+    HIGH = 'high', 'Высокий'
+
+
+class Task(models.Model):
+    title = models.CharField('Задача', max_length=200)
+    description = models.TextField('Описание', blank=True)
+    assignee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tasks', verbose_name='Исполнитель')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='created_tasks', verbose_name='Автор')
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='tasks', verbose_name='Проект')
+    status = models.CharField('Статус', max_length=12, choices=TaskStatus.choices, default=TaskStatus.TODO)
+    priority = models.CharField('Приоритет', max_length=10, choices=TaskPriority.choices,
+                                default=TaskPriority.MEDIUM)
+    deadline = models.DateField('Дедлайн', null=True, blank=True)
+    position = models.PositiveIntegerField(default=0)  # порядок внутри колонки
+    completed_at = models.DateTimeField('Выполнена', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['position', '-created_at']
+        indexes = [models.Index(fields=['assignee', 'status']), models.Index(fields=['completed_at'])]
+
+    def __str__(self):
+        return self.title
+
+    def save(self, *args, **kwargs):
+        # время выполнения ставится при переходе в «Готово» и снимается при возврате
+        if self.status == TaskStatus.DONE and not self.completed_at:
+            self.completed_at = timezone.now()
+        elif self.status != TaskStatus.DONE:
+            self.completed_at = None
+        super().save(*args, **kwargs)
+
+    @property
+    def completed_date(self):
+        return timezone.localdate(self.completed_at) if self.completed_at else None
+
+    def deadline_state(self) -> str | None:
+        """on_time / late — для выполненных; overdue / today / soon / ok — для открытых."""
+        if not self.deadline:
+            return None
+        if self.completed_at:
+            return 'on_time' if self.completed_date <= self.deadline else 'late'
+        left = (self.deadline - timezone.localdate()).days
+        if left < 0:
+            return 'overdue'
+        if left == 0:
+            return 'today'
+        return 'soon' if left <= 2 else 'ok'
+
+
+class SubTask(models.Model):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='subtasks')
+    title = models.CharField('Подзадача', max_length=200)
+    is_done = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0)
+    done_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['position', 'id']
+
+    def save(self, *args, **kwargs):
+        if self.is_done and not self.done_at:
+            self.done_at = timezone.now()
+        elif not self.is_done:
+            self.done_at = None
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title

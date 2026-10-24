@@ -204,6 +204,26 @@ server {
         expires 30d;
     }
 
+    # PWA: service worker, манифест и index.html всегда перепроверяются —
+    # иначе установленное приложение не получит обновление
+    location = /sw.js {
+        add_header Cache-Control "no-cache";
+        try_files \$uri =404;
+    }
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+    # сборка Vite: имена файлов с хэшем — можно кэшировать надолго
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
     # SPA fallback
     location / {
         try_files \$uri \$uri/ /index.html;

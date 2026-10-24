@@ -8,10 +8,10 @@
         <Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="18" />
       </button>
       <div class="brand">
-        <div class="logo"><Icon name="briefcase" :size="26" /></div>
+        <div class="logo"><Icon name="code" :size="26" :stroke-width="2.2" /></div>
         <div>
-          <div class="brand-name">IT HubPro</div>
-          <div class="muted small">Учёт проектов и финансов</div>
+          <div class="brand-name">IT Hub<span class="grad-text">Pro</span></div>
+          <div class="muted small">Задачи, проекты и финансы</div>
         </div>
       </div>
 
@@ -70,7 +70,7 @@ async function submit() {
   loading.value = true
   try {
     const user = await auth.login(username.value.trim(), password.value)
-    router.push(user.role === 'admin' ? '/dashboard' : '/me')
+    router.push(user.role === 'admin' ? '/dashboard' : '/tasks')
   } catch (e) {
     if (e.response) {
       error.value = e.response.status === 401
@@ -90,8 +90,8 @@ async function submit() {
   min-height: 100vh; display: grid; place-items: center; padding: 24px; position: relative; overflow: hidden;
 }
 .glow { position: absolute; border-radius: 50%; filter: blur(100px); opacity: .35; }
-.g1 { width: 460px; height: 460px; background: #2563eb; top: -120px; right: -80px; }
-.g2 { width: 420px; height: 420px; background: #1e40af; bottom: -140px; left: -100px; opacity: .22; }
+.g1 { width: 460px; height: 460px; background: #6366f1; top: -120px; right: -80px; }
+.g2 { width: 420px; height: 420px; background: #22d3ee; bottom: -140px; left: -100px; opacity: .18; }
 .login-card {
   position: relative; z-index: 1; width: 100%; max-width: 420px;
   background: var(--card);
@@ -101,9 +101,10 @@ async function submit() {
 .theme-toggle { position: absolute; top: 18px; right: 18px; width: 38px; height: 38px; padding: 0; }
 .brand { display: flex; align-items: center; gap: 14px; }
 .logo {
-  width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; font-size: 26px;
+  width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; color: #fff;
   background: var(--grad-brand); box-shadow: 0 10px 30px -10px rgba(99,102,241,.7);
 }
 .brand-name { font-weight: 800; font-size: 20px; letter-spacing: -.02em; }
+@media (max-width: 480px) { .login-card { padding: 26px 20px; } }
 .hint { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--stroke); font-size: 13px; color: var(--muted); }
 </style>
