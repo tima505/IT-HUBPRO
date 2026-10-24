@@ -57,38 +57,46 @@
     <Modal v-model="modal" class="wide" eyebrow="Детализация" :title="detailTitle">
       <div v-if="loading" class="center" style="padding: 30px"><span class="spinner"></span></div>
       <div v-else-if="bd">
+        <FilterBar v-model:search="q" v-model:from="dateFrom" v-model:to="dateTo" dates
+          placeholder="Проект, сервер, тип…" :count="income.length + expense.length"
+          :total="bd.income.length + bd.expense.length" />
+
         <!-- Приход -->
         <div class="row between" style="margin-bottom: 8px">
           <h3 class="h2">Откуда пришли деньги</h3>
-          <span class="badge green">+ {{ money(bd.income_total) }}</span>
+          <span class="badge green">+ {{ money(incomeTotal) }}</span>
         </div>
         <div class="dtable">
           <div class="dt-row dt-head"><span>Источник</span><span>Тип</span><span>Дата</span><span class="ta-r">В эту корзину</span></div>
-          <div v-for="(it, i) in bd.income" :key="'i'+i" class="dt-row">
+          <div v-for="(it, i) in income" :key="'i'+i" class="dt-row">
             <span><b>{{ it.source }}</b></span>
             <span class="muted">{{ it.detail }}</span>
             <span class="muted mono">{{ formatDate(it.date) }}</span>
             <span class="ta-r mono">{{ money(it.amount) }} <span class="muted small">из {{ money(it.base_amount) }}</span></span>
           </div>
-          <div v-if="!bd.income.length" class="dt-empty muted">Поступлений пока нет</div>
+          <div v-if="!income.length" class="dt-empty muted">{{ bd.income.length ? 'По фильтрам ничего не найдено' : 'Поступлений пока нет' }}</div>
         </div>
 
         <!-- Расход -->
         <div class="row between" style="margin: 22px 0 8px">
           <h3 class="h2">На что потрачено</h3>
-          <span class="badge red">− {{ money(bd.expense_total) }}</span>
+          <span class="badge red">− {{ money(expenseTotal) }}</span>
         </div>
         <div class="dtable">
           <div class="dt-row dt-exp dt-head"><span>Назначение</span><span>Тип</span><span>Дата</span><span class="ta-r">Сумма</span></div>
-          <div v-for="(it, i) in bd.expense" :key="'e'+i" class="dt-row dt-exp">
+          <div v-for="(it, i) in expense" :key="'e'+i" class="dt-row dt-exp">
             <span><b>{{ it.source }}</b></span>
             <span class="muted">{{ it.detail }}</span>
             <span class="muted mono">{{ formatDate(it.date) }}</span>
             <span class="ta-r mono">{{ money(it.amount) }}</span>
           </div>
-          <div v-if="!bd.expense.length" class="dt-empty muted">Расходов из этой корзины нет</div>
+          <div v-if="!expense.length" class="dt-empty muted">{{ bd.expense.length ? 'По фильтрам ничего не найдено' : 'Расходов из этой корзины нет' }}</div>
         </div>
 
+        <div v-if="filtering" class="row between total-row mt-16">
+          <b>Итог за выбранное</b>
+          <b class="mono" style="font-size: 18px">{{ money(incomeTotal - expenseTotal) }}</b>
+        </div>
         <div class="row between total-row mt-16">
           <b>Текущий остаток</b>
           <b class="mono" style="font-size: 18px">{{ money(bd.income_total - bd.expense_total) }}</b>
@@ -99,11 +107,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import api, { money, formatDate } from '../../api'
 import StatCard from '../../components/StatCard.vue'
 import Icon from '../../components/Icon.vue'
 import Modal from '../../components/Modal.vue'
+import FilterBar from '../../components/FilterBar.vue'
+import { textMatch, inRange } from '../../filters'
 
 const fin = ref(null)
 const settings = ref({ fund1_name: 'Фонд 20%', fund1_rate: 20, fund2_name: 'Фонд 5%', fund2_rate: 5 })
@@ -111,6 +121,19 @@ const modal = ref(false)
 const loading = ref(false)
 const bd = ref(null)
 const detailTitle = ref('')
+
+// ----- поиск и период в детализации -----
+const q = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
+const pick = (list) => (list || []).filter(it =>
+  textMatch(q.value, it.source, it.detail) && inRange(it.date, dateFrom.value, dateTo.value))
+const income = computed(() => pick(bd.value?.income))
+const expense = computed(() => pick(bd.value?.expense))
+const sum = (list) => list.reduce((acc, it) => acc + Number(it.amount || 0), 0)
+const incomeTotal = computed(() => sum(income.value))
+const expenseTotal = computed(() => sum(expense.value))
+const filtering = computed(() => !!(q.value || dateFrom.value || dateTo.value))
 
 onMounted(async () => {
   const [f, s] = await Promise.all([api.get('/finance/'), api.get('/settings/')])
@@ -121,6 +144,7 @@ onMounted(async () => {
 async function openBreakdown(bucket, title) {
   detailTitle.value = title
   bd.value = null
+  q.value = ''; dateFrom.value = ''; dateTo.value = ''  // фильтры с прошлого открытия не переносим
   modal.value = true
   loading.value = true
   try {

@@ -1,67 +1,49 @@
 <template>
   <div class="wshell">
-    <header class="wtop">
-      <div class="row gap-12">
-        <div class="logo"><Icon name="briefcase" :size="22" /></div>
-        <div>
-          <div class="brand-name">IT HubPro</div>
-          <div class="muted small">кабинет рабочего</div>
-        </div>
-      </div>
-      <div class="row gap-12">
-        <button class="btn ghost icon-btn" @click="toggleTheme" :title="theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'">
-          <Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="19" />
-        </button>
-        <div class="user-chip">
-          <div class="avatar">{{ initials }}</div>
-          <div>
-            <div style="font-weight: 600">{{ auth.user?.full_name || auth.user?.username }}</div>
-            <div class="muted small">Рабочий</div>
-          </div>
-        </div>
-        <button class="btn ghost sm" @click="logout"><Icon name="logout" :size="16" /> Выйти</button>
-      </div>
-    </header>
+    <CabinetHeader subtitle="кабинет рабочего" role-label="Рабочий" @tick="loadData" />
 
     <div class="wbody">
       <div class="hero card animate-in">
         <div class="eyebrow">Ваш заработок</div>
         <div class="hero-val mono">{{ money(data.total_earned) }}</div>
-        <div class="muted">Всего начислено по завершённым этапам ваших проектов</div>
+        <div class="muted">Всего начислено вам с оплат клиентов по вашим проектам</div>
       </div>
 
-      <h2 class="h2 mt-24" style="margin-bottom: 14px">Мои проекты</h2>
+      <div class="row between wrap gap-12 mt-24" style="margin-bottom: 14px">
+        <h2 class="h2">Мои проекты</h2>
+        <div class="row gap-8">
+          <button v-for="t in tabs" :key="t.v" class="btn sm" :class="{ primary: tab === t.v }" @click="setTab(t.v)">
+            {{ t.label }} <span class="tab-count">{{ t.count }}</span>
+          </button>
+        </div>
+      </div>
+
+      <FilterBar v-if="data.projects?.length" v-model:search="q" v-model:from="dateFrom" v-model:to="dateTo" dates
+        date-label="Дедлайн" placeholder="Название проекта, комментарий…" :count="tabProjects.length" :total="tabAll.length" />
 
       <transition-group name="list" tag="div" class="cards">
         <div v-for="p in visibleProjects" :key="p.id" class="pcard card">
           <div class="row between">
             <StatusBadge :status="p.status" />
             <div class="row gap-4">
-              <span v-if="p.has_stages" class="badge blue">Этапы</span>
               <span v-if="p.has_monthly" class="badge amber">Ежемесячная</span>
             </div>
           </div>
           <h3 class="p-name">{{ p.name }}</h3>
+          <div v-if="p.client_name || p.client_phone" class="muted small row gap-8"><Icon name="phone" :size="14" /> Клиент: {{ [p.client_name, p.client_phone].filter(Boolean).join(' · ') }}</div>
 
-          <div class="earn" v-if="p.has_stages">
+          <div class="earn" v-if="p.has_price">
             <div class="row between">
-              <span class="muted small">Старт</span>
-              <span class="mono muted">без доли</span>
-            </div>
-            <div class="row between">
-              <span class="muted small">Бета</span>
-              <span class="mono">{{ money(p.worker_beta_amount) }}</span>
-            </div>
-            <div class="row between">
-              <span class="muted small">Сдача</span>
-              <span class="mono">{{ money(p.worker_final_amount) }}</span>
+              <span class="muted small">Ваша сумма за проект</span>
+              <span v-if="p.worker_amount" class="mono">{{ money(p.worker_amount) }}</span>
+              <span v-else class="muted small">пока не указана</span>
             </div>
             <div class="row between" style="margin-top: 8px; border-top: 1px solid var(--stroke); padding-top: 8px">
-              <span class="muted small">Уже выплачено вам</span>
+              <span class="muted small">Начислено вам</span>
               <span class="mono" style="font-size: 16px; font-weight: 800; color: var(--warn-fg)">{{ money(p.totals.worker) }}</span>
             </div>
           </div>
-          <div class="earn" v-if="p.has_monthly && !p.has_stages">
+          <div class="earn" v-if="p.has_monthly && !p.has_price">
             <div class="muted small">Помесячный проект</div>
             <div class="muted small">Оплата вашей работы обсуждается отдельно.</div>
           </div>
@@ -74,11 +56,30 @@
 
           <div class="deadline-line">
             <DeadlineBadge :status="p.deadline_status" />
-            <div v-if="p.status === 'active'">
-              <button v-if="!p.finished_date" class="btn sm green" @click="finish(p)"><Icon name="check" :size="14" /> Отметить сдачу</button>
-              <button v-else class="btn sm ghost" @click="unfinish(p)">Отменить</button>
-            </div>
           </div>
+
+          <!-- сдача идёт через проверку: проверит любой тестировщик -->
+          <div v-if="p.status === 'active' || p.review_status !== 'none'" class="review-line" :class="p.review_status">
+            <div class="row between gap-8 wrap">
+              <span class="muted small row gap-8"><Icon name="check-circle" :size="14" />
+                <template v-if="p.reviewer_name">Проверил: <b class="strong">{{ p.reviewer_name }}</b></template>
+                <template v-else>Проверка тестировщиком</template>
+              </span>
+              <ReviewBadge :status="p.review_status" />
+            </div>
+            <div v-if="p.review_status === 'returned' && lastReturn(p)" class="return-note">
+              <div class="muted small">Замечания тестировщика</div>
+              <div class="return-text">{{ lastReturn(p).text }}</div>
+            </div>
+            <button class="btn sm" :class="canSubmit(p) ? 'primary' : 'ghost'" @click="openReview(p)">
+              <Icon :name="canSubmit(p) ? 'send' : 'message'" :size="14" />
+              {{ canSubmit(p) ? (p.review_status === 'returned' ? 'Исправил — отправить снова' : 'Отправить на проверку') : 'Переписка' }}
+              <span v-if="p.comments.length" class="tab-count">{{ p.comments.length }}</span>
+            </button>
+          </div>
+          <button v-else-if="p.comments.length" class="btn sm ghost" @click="openReview(p)">
+            <Icon name="message" :size="14" /> Комментарии <span class="tab-count">{{ p.comments.length }}</span>
+          </button>
 
           <div v-if="p.servers.length" class="srv-line muted small row gap-8">
             <Icon name="server" :size="14" /> Сервер до {{ formatDate(p.servers[0].expiry_date) }}
@@ -97,52 +98,88 @@
       <div v-if="!data.projects?.length" class="card center muted" style="padding: 50px">
         Пока вам не назначено ни одного проекта
       </div>
+      <div v-else-if="!tabProjects.length" class="card center muted" style="padding: 50px">
+        {{ tabAll.length ? 'По фильтрам ничего не найдено' : (tab === 'active' ? 'Сейчас нет проектов в работе' : 'Завершённых проектов пока нет') }}
+      </div>
     </div>
+
+    <Modal v-model="reviewModal" eyebrow="Проверка проекта" :title="current?.name" wide>
+      <ReviewThread v-if="current" :project="current" @update="onUpdate" />
+    </Modal>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import api, { money, formatDate } from '../../api'
-import { useAuth } from '../../stores/auth'
-import { theme, toggleTheme } from '../../theme'
+import CabinetHeader from '../../components/CabinetHeader.vue'
+import Modal from '../../components/Modal.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import Icon from '../../components/Icon.vue'
 import DeadlineBadge from '../../components/DeadlineBadge.vue'
+import ReviewBadge from '../../components/ReviewBadge.vue'
+import ReviewThread from '../../components/ReviewThread.vue'
+import FilterBar from '../../components/FilterBar.vue'
+import { textMatch, inRange } from '../../filters'
 
-const auth = useAuth()
-const router = useRouter()
 const data = ref({ projects: [], total_earned: 0 })
 
 const VISIBLE_LIMIT = 3
 const expanded = ref(false)
+
+// «В работе» — по умолчанию; завершённые и отменённые уходят во вторую вкладку
+const tab = ref('active')
+const activeProjects = computed(() => (data.value.projects || []).filter(p => p.status === 'active'))
+const closedProjects = computed(() => {
+  const all = data.value.projects || []
+  return [...all.filter(p => p.status === 'done'), ...all.filter(p => p.status === 'cancelled')]
+})
+const tabs = computed(() => [
+  { v: 'active', label: 'В работе', count: activeProjects.value.length },
+  { v: 'closed', label: 'Завершённые', count: closedProjects.value.length },
+])
+const tabAll = computed(() => (tab.value === 'active' ? activeProjects.value : closedProjects.value))
+
+// поиск по названию и переписке, период по дедлайну
+const q = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
+const tabProjects = computed(() => tabAll.value.filter(p =>
+  textMatch(q.value, p.name, p.reviewer_name, ...p.comments.map(c => c.text)) &&
+  inRange(p.deadline_date, dateFrom.value, dateTo.value)))
+function setTab(v) { tab.value = v; expanded.value = false }
+
 const visibleProjects = computed(() =>
-  expanded.value ? data.value.projects : (data.value.projects || []).slice(0, VISIBLE_LIMIT)
+  expanded.value ? tabProjects.value : tabProjects.value.slice(0, VISIBLE_LIMIT)
 )
-const hiddenCount = computed(() => Math.max(0, (data.value.projects?.length || 0) - VISIBLE_LIMIT))
+const hiddenCount = computed(() => Math.max(0, tabProjects.value.length - VISIBLE_LIMIT))
 
 async function loadData() { data.value = (await api.get('/worker/dashboard/')).data }
-async function finish(p) { await api.post(`/projects/${p.id}/finish/`, {}); await loadData() }
-async function unfinish(p) { await api.post(`/projects/${p.id}/finish/`, { clear: true }); await loadData() }
 
-const initials = computed(() => {
-  const n = auth.user?.full_name || auth.user?.username || '?'
-  return n.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()
-})
+// ----- проверка тестировщиком -----
+const canSubmit = (p) => p.status === 'active' && ['none', 'returned'].includes(p.review_status)
+const lastReturn = (p) => [...p.comments].reverse().find(c => c.kind === 'return')
 
-function logout() { auth.logout(); router.push('/login') }
+const reviewModal = ref(false)
+const currentId = ref(null)
+const current = computed(() => (data.value.projects || []).find(p => p.id === currentId.value) || null)
+function openReview(p) { currentId.value = p.id; reviewModal.value = true }
+function onUpdate(fresh) {
+  const i = data.value.projects.findIndex(p => p.id === fresh.id)
+  if (i >= 0) data.value.projects[i] = fresh
+}
 
 onMounted(loadData)
 </script>
 
 <style scoped>
 .wshell { min-height: 100vh; }
-.wtop { display: flex; align-items: center; justify-content: space-between; padding: 18px 32px; border-bottom: 1px solid var(--stroke); position: sticky; top: 0; background: var(--panel); z-index: 10; }
-.logo { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: #fff; background: var(--grad-brand); }
-.brand-name { font-weight: 800; letter-spacing: -.02em; }
-.user-chip { display: flex; align-items: center; gap: 10px; }
-.avatar { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-weight: 700; background: var(--grad-brand); color: #fff; }
+.strong { color: var(--text); }
+.review-line { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px; background: var(--input-bg); border: 1px solid var(--stroke); }
+.review-line.returned { border-color: var(--c-red); }
+.review-line.review { border-color: var(--brand); }
+.return-note { padding: 10px 12px; border-radius: 10px; background: var(--bad-bg); }
+.return-text { margin-top: 4px; font-size: 14px; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .wbody { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
 .hero { position: relative; overflow: hidden; }
 .hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(300px 160px at 90% -10%, rgba(37,99,235,.18), transparent 70%); pointer-events: none; }
@@ -155,6 +192,7 @@ onMounted(loadData)
 .earn { padding: 14px; border-radius: 12px; background: var(--input-bg); display: flex; flex-direction: column; gap: 4px; }
 .dates { display: flex; justify-content: space-between; }
 .dates div { display: flex; flex-direction: column; gap: 3px; }
+.tab-count { opacity: .7; font-weight: 700; margin-left: 2px; }
 .more-row { display: flex; justify-content: center; margin-top: 20px; }
 .more-btn { border-radius: 999px; padding: 11px 22px; }
 .more-btn:hover { border-color: var(--brand); color: var(--brand); }

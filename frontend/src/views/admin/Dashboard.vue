@@ -27,7 +27,6 @@
               <td><b>{{ p.name }}</b></td>
               <td class="muted">{{ p.worker_name }}</td>
               <td>
-                <span v-if="p.has_stages" class="badge blue">Этапы</span>
                 <span v-if="p.has_monthly" class="badge amber">Ежемесячно</span>
               </td>
               <td><StatusBadge :status="p.status" /></td>
@@ -74,7 +73,7 @@ onMounted(async () => {
   const [f, p, w, d, s] = await Promise.all([
     api.get('/finance/'),
     api.get('/projects/'),
-    api.get('/workers/'),
+    api.get('/users/?role=worker'),
     api.get('/projects/due_monthly/'),
     api.get('/settings/'),
   ])
@@ -89,7 +88,7 @@ onMounted(async () => {
 <style scoped>
 .grid-4, .grid-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
-.due-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.due-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--stroke); }
 .due-row:last-child { border-bottom: none; }
 @media (max-width: 1100px) { .grid-4, .grid-stats { grid-template-columns: repeat(2,1fr); } .two-col { grid-template-columns: 1fr; } }
 </style>

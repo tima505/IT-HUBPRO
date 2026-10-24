@@ -114,6 +114,59 @@ def finance_breakdown(bucket: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+#  История: единая лента всего, что происходило
+# --------------------------------------------------------------------------- #
+def activity_log() -> list:
+    """События по проектам, деньгам, серверам и проверке — новые сверху.
+
+    date — дата события для показа и фильтра, at — точное время для сортировки.
+    """
+    from .models import ProjectComment  # локально, чтобы не плодить импорт сверху
+    events = []
+
+    def add(key, kind, date, at, title, text='', amount=None, project=None, who=''):
+        events.append({
+            'id': key, 'type': kind, 'date': date, 'at': at, 'title': title, 'text': text,
+            'amount': amount, 'who': who,
+            'project_id': project.id if project else None,
+            'project_name': project.name if project else '',
+        })
+
+    for p in Project.objects.select_related('worker'):
+        add(f'project-{p.id}', 'project', timezone.localtime(p.created_at).date(), p.created_at,
+            'Создан проект', f'Рабочий: {p.worker}', p.total_price or None, p, '')
+        if p.finished_date and p.review_status == 'none':  # сдача отмечена админом без проверки
+            add(f'finish-{p.id}', 'project', p.finished_date, p.created_at,
+                'Рабочий отметил сдачу', '', None, p, str(p.worker))
+
+    for pay in Payment.objects.select_related('project'):
+        add(f'pay-{pay.id}', 'payment', pay.date, pay.created_at,
+            f'Платёж: {pay.get_kind_display()}',
+            f'фонды {pay.fund20_amount + pay.fund5_amount:,.0f} · рабочему {pay.worker_amount:,.0f}'
+            f' · компании {pay.company_amount:,.0f} ₸'.replace(',', ' '),
+            pay.amount, pay.project)
+
+    for s in Server.objects.select_related('project'):
+        add(f'server-{s.id}', 'server', s.purchase_date, s.created_at,
+            f'Куплен сервер «{s.label}»', f'на {s.days} дн., оплачен из: {s.get_paid_from_display()}',
+            s.amount, s.project)
+
+    for rn in ServerRenewal.objects.select_related('server__project'):
+        add(f'renew-{rn.id}', 'server', rn.date, rn.created_at,
+            f'Продлён сервер «{rn.server.label}»',
+            f'на {rn.days} дн., до {rn.new_expiry:%d.%m.%Y}, оплачен из: {rn.get_paid_from_display()}',
+            rn.amount, rn.server.project)
+
+    for c in ProjectComment.objects.select_related('project', 'author'):
+        add(f'comment-{c.id}', 'comment' if c.kind == ProjectComment.Kind.COMMENT else 'review',
+            timezone.localtime(c.created_at).date(), c.created_at,
+            c.get_kind_display(), c.text, None, c.project, str(c.author) if c.author_id else '')
+
+    events.sort(key=lambda e: (e['date'], e['at']), reverse=True)
+    return events
+
+
+# --------------------------------------------------------------------------- #
 #  Уведомления
 # --------------------------------------------------------------------------- #
 
@@ -122,7 +175,11 @@ PROJECT_MILESTONES = [3, 0]    # за сколько дней до ежемес�
 
 
 def _admins():
-    return User.objects.filter(role=User.Role.ADMIN)
+    return User.with_role(User.Role.ADMIN).filter(is_active=True)
+
+
+def _testers():
+    return User.with_role(User.Role.TESTER).filter(is_active=True)
 
 
 def _create(recipient, kind, title, message, dedup_key):
@@ -130,6 +187,17 @@ def _create(recipient, kind, title, message, dedup_key):
         dedup_key=dedup_key,
         defaults=dict(recipient=recipient, kind=kind, title=title, message=message),
     )
+
+
+def notify_review(comment, recipients, title, message):
+    """Уведомление о шаге проверки/комментарии — всем получателям, кроме автора."""
+    seen = set()
+    for user in recipients:
+        if user is None or user.id == comment.author_id or user.id in seen:
+            continue
+        seen.add(user.id)
+        _create(user, Notification.Kind.REVIEW, title, message,
+                f'review:{comment.project_id}:{comment.id}:{user.id}')
 
 
 def generate_notifications():

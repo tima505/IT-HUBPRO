@@ -16,7 +16,7 @@
       </div>
 
       <h1 class="h1" style="margin-top: 26px">Вход в систему</h1>
-      <p class="muted" style="margin-top: 6px">Войдите как суперадмин или рабочий</p>
+      <p class="muted" style="margin-top: 6px">Войдите под своим логином и паролем</p>
 
       <form @submit.prevent="submit" style="margin-top: 22px">
         <div class="field">
@@ -38,11 +38,13 @@
         </button>
       </form>
 
-      <div class="hint">
+      <!-- демо-доступы есть только в локальной базе (seed) — на проде их не показываем -->
+      <div v-if="isDev" class="hint">
         <div>Демо-доступы:</div>
         <div class="row gap-8 wrap mt-8">
           <button class="btn sm ghost" type="button" @click="fill('admin','admin12345')">admin</button>
           <button class="btn sm ghost" type="button" @click="fill('aidos','worker12345')">рабочий: aidos</button>
+          <button class="btn sm ghost" type="button" @click="fill('tester','tester12345')">тестировщик: tester</button>
         </div>
       </div>
     </div>
@@ -58,6 +60,7 @@ import Icon from '../components/Icon.vue'
 
 const auth = useAuth()
 const router = useRouter()
+const isDev = import.meta.env.DEV
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
@@ -69,15 +72,17 @@ async function submit() {
   error.value = ''
   loading.value = true
   try {
-    const user = await auth.login(username.value.trim(), password.value)
-    router.push(user.role === 'admin' ? '/dashboard' : '/me')
+    await auth.login(username.value.trim(), password.value)
+    router.push(auth.home)
   } catch (e) {
     if (e.response) {
       error.value = e.response.status === 401
         ? 'Неверный логин или пароль'
         : `Ошибка сервера (${e.response.status})`
     } else {
-      error.value = 'Сервер недоступен. Запущен ли backend на :8000?'
+      error.value = isDev
+        ? 'Сервер недоступен. Запущен ли backend на :8000?'
+        : 'Сервер недоступен. Попробуйте позже.'
     }
   } finally {
     loading.value = false

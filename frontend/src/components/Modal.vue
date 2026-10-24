@@ -1,6 +1,7 @@
 <template>
   <transition name="fade">
-    <div v-if="modelValue" class="modal-backdrop" @mousedown.self="close">
+    <!-- закрывается только крестиком (или кнопками внутри окна): клик мимо и Esc не теряют введённое -->
+    <div v-if="modelValue" class="modal-backdrop">
       <transition name="pop" appear>
         <div class="modal" :class="{ wide }">
           <div class="row between" style="margin-bottom: 18px">
@@ -18,10 +19,9 @@
 </template>
 
 <script setup>
-import { watch, onUnmounted } from 'vue'
 import Icon from './Icon.vue'
 
-const props = defineProps({
+defineProps({
   modelValue: Boolean,
   title: String,
   eyebrow: String,
@@ -31,14 +31,4 @@ const emit = defineEmits(['update:modelValue'])
 function close() {
   emit('update:modelValue', false)
 }
-
-function onKey(e) {
-  if (e.key === 'Escape') close()
-}
-// вешаем слушатель Escape только пока окно открыто
-watch(() => props.modelValue, (open) => {
-  if (open) document.addEventListener('keydown', onKey)
-  else document.removeEventListener('keydown', onKey)
-})
-onUnmounted(() => document.removeEventListener('keydown', onKey))
 </script>

@@ -5,13 +5,24 @@
       <button class="btn primary" @click="openBuy"><Icon name="server" :size="18" /> Купить сервер</button>
     </div>
 
+    <FilterBar v-model:search="q" v-model:from="dateFrom" v-model:to="dateTo" dates date-label="Действует до"
+      placeholder="Сервер, проект, логин…" :count="shown.length" :total="servers.length"
+      :extra-active="!!state" @reset="state = ''">
+      <select v-model="state" class="select f-select">
+        <option value="">Любой срок</option>
+        <option value="soon">Истекают за 7 дней</option>
+        <option value="expired">Истёкшие</option>
+        <option value="ok">Активные</option>
+      </select>
+    </FilterBar>
+
     <div class="card tight">
       <table class="table">
         <thead>
           <tr><th>Сервер</th><th>Логин</th><th>Проект</th><th>Действует до</th><th>Осталось</th><th>Стоимость</th><th>Оплачен из</th><th style="width:1%"></th></tr>
         </thead>
         <tbody>
-          <tr v-for="s in servers" :key="s.id">
+          <tr v-for="s in shown" :key="s.id">
             <td><b>{{ s.label }}</b></td>
             <td class="muted mono">{{ s.login }}</td>
             <td class="muted">{{ s.project_name || '—' }}</td>
@@ -32,7 +43,7 @@
               </div>
             </td>
           </tr>
-          <tr v-if="!servers.length"><td colspan="8" class="muted center" style="padding: 30px">Серверов нет</td></tr>
+          <tr v-if="!shown.length"><td colspan="8" class="muted center" style="padding: 30px">{{ servers.length ? 'По фильтрам ничего не найдено' : 'Серверов нет' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -190,9 +201,27 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import api, { money, formatDate } from '../../api'
 import Modal from '../../components/Modal.vue'
 import Icon from '../../components/Icon.vue'
+import FilterBar from '../../components/FilterBar.vue'
+import { textMatch, inRange } from '../../filters'
 
 const emit = defineEmits(['changed'])
 const servers = ref([])
+
+// ----- поиск и фильтры -----
+const q = ref('')
+const state = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
+const byState = {
+  soon: s => s.days_left >= 0 && s.days_left <= 7,
+  expired: s => s.days_left < 0,
+  ok: s => s.days_left >= 0,
+}
+const shown = computed(() => servers.value.filter(s =>
+  textMatch(q.value, s.label, s.login, s.project_name, s.paid_from_display) &&
+  (!state.value || byState[state.value](s)) &&
+  inRange(s.expiry_date, dateFrom.value, dateTo.value)
+))
 const projects = ref([])
 const buyModal = ref(false)
 const renewModal = ref(false)

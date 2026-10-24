@@ -17,7 +17,7 @@ class Command(BaseCommand):
 
         admin, created = User.objects.get_or_create(
             username='admin',
-            defaults=dict(role=User.Role.ADMIN, full_name='Супер Админ',
+            defaults=dict(role_admin=True, full_name='Супер Админ',
                           is_staff=True, is_superuser=True),
         )
         if created:
@@ -29,13 +29,21 @@ class Command(BaseCommand):
 
         # рабочие
         w1, c1 = User.objects.get_or_create(
-            username='aidos', defaults=dict(role=User.Role.WORKER, full_name='Айдос Серіков'))
+            username='aidos', defaults=dict(role_worker=True, full_name='Айдос Серіков'))
         if c1:
             w1.set_password('worker12345'); w1.save()
         w2, c2 = User.objects.get_or_create(
-            username='dana', defaults=dict(role=User.Role.WORKER, full_name='Дана Ахметова'))
+            username='dana', defaults=dict(role_worker=True, full_name='Дана Ахметова'))
         if c2:
             w2.set_password('worker12345'); w2.save()
+
+        # тестировщики: любой из них проверяет любой проект
+        for username, full_name in [('tester', 'Тимур Тестов'), ('tester2', 'Алия Проверкина')]:
+            t, ct = User.objects.get_or_create(
+                username=username, defaults=dict(role_tester=True, full_name=full_name))
+            if ct:
+                t.set_password('tester12345'); t.save()
+                self.stdout.write(self.style.SUCCESS(f'Тестировщик: {username} / tester12345'))
 
         if Project.objects.exists():
             self.stdout.write('Демо-проекты уже созданы, пропускаю.')
@@ -47,14 +55,13 @@ class Command(BaseCommand):
         # Проект 1: Этапы, есть старт, есть сервер
         p1 = Project.objects.create(
             name='Интернет-магазин «Sauda»', worker=w1,
-            has_stages=True, has_monthly=False,
-            worker_beta_amount=Decimal('80000'), worker_final_amount=Decimal('60000'),
-            start_amount=Decimal('100000'), beta_amount=Decimal('400000'), final_amount=Decimal('300000'),
+            has_price=True, has_monthly=False, client_name='ТОО «Sauda»', client_phone='+7 701 111 22 33',
+            price=Decimal('800000'), worker_amount=Decimal('140000'),
             start_date=today - timedelta(days=10),
             deadline_date=today + timedelta(days=20),
             beta_date=today + timedelta(days=10),
         )
-        Payment.objects.create(project=p1, kind=PaymentKind.START, amount=Decimal('100000'))
+        Payment.objects.create(project=p1, kind=PaymentKind.PAYMENT, amount=Decimal('100000'))
         Server.objects.create(
             project=p1, label='VPS для Sauda', login='root', password='S3rv3r!',
             purchase_date=today - timedelta(days=353), days=365,
@@ -65,8 +72,7 @@ class Command(BaseCommand):
         # Проект 2: ежемесячная оплата
         p2 = Project.objects.create(
             name='CRM для клиники', worker=w2,
-            has_stages=False, has_monthly=True,
-            worker_beta_amount=Decimal('0'), worker_final_amount=Decimal('0'),
+            has_price=False, has_monthly=True, client_phone='+7 702 333 44 55',
             monthly_amount=Decimal('150000'),
             start_date=today - timedelta(days=2),
             deadline_date=today + timedelta(days=60),
@@ -79,9 +85,8 @@ class Command(BaseCommand):
         # Проект 3: комбинированный (Этапы + Ежемесячно)
         p3 = Project.objects.create(
             name='ERP Система', worker=w1,
-            has_stages=True, has_monthly=True,
-            worker_beta_amount=Decimal('50000'), worker_final_amount=Decimal('100000'),
-            start_amount=Decimal('200000'), beta_amount=Decimal('300000'), final_amount=Decimal('500000'),
+            has_price=True, has_monthly=True,
+            price=Decimal('1000000'), worker_amount=Decimal('150000'),
             monthly_amount=Decimal('50000'),
             start_date=today - timedelta(days=5),
             deadline_date=today + timedelta(days=90),
@@ -89,6 +94,6 @@ class Command(BaseCommand):
         )
         p3.monthly_next_due = today + timedelta(days=25)
         p3.save()
-        Payment.objects.create(project=p3, kind=PaymentKind.START, amount=Decimal('200000'))
+        Payment.objects.create(project=p3, kind=PaymentKind.PAYMENT, amount=Decimal('200000'))
 
         self.stdout.write(self.style.SUCCESS('Демо-данные созданы.'))

@@ -21,6 +21,7 @@
 
 /* ---------- Тёмная тема ---------- */
 [data-theme='dark'] {
+  color-scheme: dark;  /* нативные контролы (календарь в date, скроллбары) — светлые на тёмном */
   --bg: #0a0e17;
   --bg-grad-1: rgba(37, 99, 235, 0.10);
   --bg-grad-2: rgba(37, 99, 235, 0.06);
@@ -45,6 +46,7 @@
 
 /* ---------- Светлая тема ---------- */
 [data-theme='light'] {
+  color-scheme: light;
   --bg: #f3f5fa;
   --bg-grad-1: rgba(37, 99, 235, 0.08);
   --bg-grad-2: rgba(37, 99, 235, 0.05);
@@ -224,3 +226,7 @@ button { font-family: inherit; }
 
 @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(220,38,38,.5);} 70%{ box-shadow:0 0 0 8px rgba(220,38,38,0);} 100%{box-shadow:0 0 0 0 rgba(220,38,38,0);} }
 .pulse { animation: pulseRing 2s infinite; }
+
+/* Иконка календаря в полях даты (цвет задаёт color-scheme темы), при наведении ярче */
+input[type='date']::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .75; transition: opacity .2s; }
+input[type='date']::-webkit-calendar-picker-indicator:hover { opacity: 1; }
