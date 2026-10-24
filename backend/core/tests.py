@@ -786,3 +786,105 @@ class UserManageTests(TestCase):
     def test_worker_cannot_manage_users(self):
         w = User.objects.create(username='w', role_worker=True)
         self.assertEqual(client_for(w).get('/api/users/').status_code, 403)
+
+
+# --------------------------------------------------------------------------- #
+#  Личный план на день / неделю
+# --------------------------------------------------------------------------- #
+from .models import PlanItem, week_start
+
+
+class PlanTests(TestCase):
+    def setUp(self):
+        self.today = timezone.localdate()
+        self.admin = User.objects.create(username='adm', role_admin=True)
+        self.w = User.objects.create(username='w', full_name='Рабочий', role_worker=True)
+        self.other = User.objects.create(username='o', role_tester=True)
+        self.as_w, self.as_other, self.as_admin = client_for(self.w), client_for(self.other), client_for(self.admin)
+
+    def add(self, title, period='day', date=None, client=None):
+        return (client or self.as_w).post('/api/plan/', {'title': title, 'period': period,
+                                                         'date': (date or self.today).isoformat()}, format='json')
+
+    def items(self, period='day', date=None, client=None, user=None):
+        q = f'?period={period}&date={(date or self.today).isoformat()}' + (f'&user={user}' if user else '')
+        return (client or self.as_w).get('/api/plan/' + q)
+
+    def test_each_user_has_own_list(self):
+        self.add('Мой пункт')
+        self.add('Чужой', client=self.as_other)
+        self.assertEqual([i['title'] for i in self.items().json()], ['Мой пункт'])
+        self.assertEqual([i['title'] for i in self.items(client=self.as_other).json()], ['Чужой'])
+
+    def test_cannot_touch_foreign_items(self):
+        iid = self.add('Чужой', client=self.as_other).json()['id']
+        self.assertEqual(self.as_w.patch(f'/api/plan/{iid}/', {'is_done': True}, format='json').status_code, 404)
+        self.assertEqual(self.as_w.delete(f'/api/plan/{iid}/').status_code, 404)
+        self.assertEqual(self.items(user=self.other.id).status_code, 403)  # рабочему чужой план не виден
+
+    def test_admin_sees_others_read_only(self):
+        iid = self.add('Пункт рабочего').json()['id']
+        r = self.items(client=self.as_admin, user=self.w.id)
+        self.assertEqual([i['title'] for i in r.json()], ['Пункт рабочего'])
+        self.assertEqual(self.as_admin.patch(f'/api/plan/{iid}/', {'is_done': True}, format='json').status_code, 404)
+
+    def test_week_date_normalized_to_monday(self):
+        wednesday = week_start(self.today) + timedelta(days=2)
+        r = self.add('Недельная цель', period='week', date=wednesday)
+        self.assertEqual(r.json()['date'], week_start(self.today).isoformat())
+        self.assertEqual(len(self.items(period='week', date=wednesday + timedelta(days=3)).json()), 1)
+
+    def test_done_toggle_and_validation(self):
+        iid = self.add('Сделать').json()['id']
+        r = self.as_w.patch(f'/api/plan/{iid}/', {'is_done': True}, format='json')
+        self.assertIsNotNone(r.json()['done_at'])
+        self.assertEqual(self.add('   ').status_code, 400)
+        r = self.as_w.patch(f'/api/plan/{iid}/', {'date': (self.today + timedelta(days=1)).isoformat()}, format='json')
+        self.assertEqual(r.status_code, 400)
+
+    def test_carry_over_keeps_history(self):
+        yesterday = self.today - timedelta(days=1)
+        a = self.add('Готово', date=yesterday).json()['id']
+        self.add('Не успел', date=yesterday)
+        self.as_w.patch(f'/api/plan/{a}/', {'is_done': True}, format='json')
+        r = self.as_w.post('/api/plan/carry_over/', {'period': 'day', 'from_date': yesterday.isoformat(),
+                                                     'to_date': self.today.isoformat()}, format='json')
+        self.assertEqual(r.json()['moved'], 1)
+        self.assertEqual([i['title'] for i in self.items().json()], ['Не успел'])
+        old = self.items(date=yesterday).json()
+        self.assertEqual([(i['title'], i['is_done'], i['carried']) for i in old],
+                         [('Готово', True, False), ('Не успел', False, True)])
+        # повторно перенести нечего; назад переносить нельзя
+        r = self.as_w.post('/api/plan/carry_over/', {'period': 'day', 'from_date': yesterday.isoformat(),
+                                                     'to_date': self.today.isoformat()}, format='json')
+        self.assertEqual(r.status_code, 400)
+        r = self.as_w.post('/api/plan/carry_over/', {'period': 'day', 'from_date': self.today.isoformat(),
+                                                     'to_date': yesterday.isoformat()}, format='json')
+        self.assertEqual(r.status_code, 400)
+
+    def test_stats(self):
+        y, y2 = self.today - timedelta(days=1), self.today - timedelta(days=2)
+        for d, total, done in ((y2, 2, 2), (y, 3, 3), (self.today, 4, 1)):
+            for i in range(total):
+                PlanItem.objects.create(user=self.w, date=d, title=f'{d} {i}', is_done=i < done)
+        PlanItem.objects.create(user=self.w, period='week', date=self.today, title='Цель недели', is_done=True)
+        data = self.as_w.get('/api/plan/stats/').json()
+        days = {d['date']: d for d in data['days']}
+        self.assertEqual(len(data['days']), 14)
+        self.assertEqual((days[y.isoformat()]['rate'], days[self.today.isoformat()]['rate']), (100, 25))
+        self.assertEqual(data['streak'], 2)  # вчера и позавчера выполнено всё; сегодня ещё нет
+        self.assertEqual(data['summary'], {'planned': 9, 'done': 6, 'rate': 67, 'days_with_plan': 3, 'perfect_days': 2})
+        this_week = data['weeks'][-1]
+        self.assertEqual((this_week['week_planned'], this_week['week_done']), (1, 1))
+        # чужая статистика — только админу
+        self.assertEqual(self.as_other.get(f'/api/plan/stats/?user={self.w.id}').status_code, 403)
+        self.assertEqual(self.as_admin.get(f'/api/plan/stats/?user={self.w.id}').json()['streak'], 2)
+
+    def test_team_summary_admin_only(self):
+        self.add('a')
+        iid = self.add('b').json()['id']
+        self.as_w.patch(f'/api/plan/{iid}/', {'is_done': True}, format='json')
+        rows = {r['username']: r for r in self.as_admin.get('/api/plan/team/').json()}
+        self.assertEqual((rows['w']['week_planned'], rows['w']['week_done'], rows['w']['week_rate']), (2, 1, 50))
+        self.assertEqual((rows['w']['today_planned'], rows['w']['today_done']), (2, 1))
+        self.assertEqual(self.as_w.get('/api/plan/team/').status_code, 403)

@@ -5,8 +5,8 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from core.models import (
-    Bucket, GlobalSettings, Payment, PaymentKind, Project, ProjectStatus, Server, SubTask, Task,
-    TaskPriority, TaskStatus, User, WorkerPayout,
+    Bucket, GlobalSettings, Payment, PaymentKind, PlanItem, PlanPeriod, Project, ProjectStatus, Server,
+    SubTask, Task, TaskPriority, TaskStatus, User, WorkerPayout,
 )
 
 
@@ -55,6 +55,33 @@ class Command(BaseCommand):
             self.stdout.write('Демо-задачи уже созданы, пропускаю.')
         else:
             self.seed_tasks(today, admin, w1, w2)
+
+        if PlanItem.objects.exists():
+            self.stdout.write('Демо-планы уже созданы, пропускаю.')
+        else:
+            self.seed_plans(today, [w1, w2, admin])
+
+    def seed_plans(self, today, users):
+        """Личные планы за последние две недели — чтобы была видна статистика."""
+        import random
+        rnd = random.Random(7)
+        ideas = ['Код-ревью', 'Созвон с клиентом', 'Исправить баги', 'Написать тесты', 'Обновить ТЗ',
+                 'Деплой', 'Дизайн экрана', 'Документация', 'Оптимизация запросов', 'Планёрка']
+        for user in users:
+            for back in range(13, -1, -1):
+                d = today - timedelta(days=back)
+                if d.weekday() >= 5 or rnd.random() < 0.15:
+                    continue  # выходные и редкие дни без плана
+                total = rnd.randint(3, 5)
+                done = total if back and rnd.random() < 0.5 else rnd.randint(1 if back else 0, total)
+                for i, title in enumerate(rnd.sample(ideas, total)):
+                    PlanItem.objects.create(user=user, period=PlanPeriod.DAY, date=d, title=title,
+                                            is_done=i < done, position=i)
+            monday = today - timedelta(days=today.weekday())
+            for i, title in enumerate(['Сдать бету клиенту', 'Закрыть все баги из трекера', 'Подготовить демо']):
+                PlanItem.objects.create(user=user, period=PlanPeriod.WEEK, date=monday, title=title,
+                                        is_done=i == 0, position=i)
+        self.stdout.write(self.style.SUCCESS('Демо-планы созданы.'))
 
     def seed_projects(self, today, w1, w2):
         D = lambda n: today + timedelta(days=n)

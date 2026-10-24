@@ -8,7 +8,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import (
     Bucket, GlobalSettings, Notification, Payment, PaymentKind, Project,
-    ProjectComment, ReviewStatus, Server, ServerRenewal, SubTask, Task, TaskStatus, User,
+    PlanItem, ProjectComment, ReviewStatus, Server, ServerRenewal, SubTask, Task, TaskStatus, User,
     WorkerPayout, money,
 )
 
@@ -758,3 +758,41 @@ class TaskSerializer(serializers.ModelSerializer):
         last = Task.objects.filter(status=validated_data.get('status', TaskStatus.TODO)).order_by('-position').first()
         validated_data['position'] = (last.position + 1) if last else 0
         return super().create(validated_data)
+
+
+# --------------------------------------------------------------------------- #
+#  Личный план
+# --------------------------------------------------------------------------- #
+class PlanItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlanItem
+        fields = ['id', 'period', 'date', 'title', 'is_done', 'done_at', 'carried', 'position', 'created_at']
+        read_only_fields = ['done_at', 'carried', 'position', 'created_at']
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Напишите, что нужно сделать.')
+        return value
+
+    def validate(self, attrs):
+        if self.instance and ('period' in attrs or 'date' in attrs):
+            # перенос делается через «Перенести невыполненные» — так сохраняется история
+            if attrs.get('period', self.instance.period) != self.instance.period or \
+                    attrs.get('date', self.instance.date) != self.instance.date:
+                raise field_error('date', 'Пункт плана нельзя переставить на другую дату — перенесите невыполненные.')
+        return attrs
+
+
+class CarryOverSerializer(serializers.Serializer):
+    period = serializers.ChoiceField(choices=PlanItem._meta.get_field('period').choices, label='Период')
+    from_date = serializers.DateField(label='Откуда')
+    to_date = serializers.DateField(label='Куда')
+
+    def validate(self, attrs):
+        from .models import PlanPeriod, week_start
+        if attrs['period'] == PlanPeriod.WEEK:
+            attrs['from_date'], attrs['to_date'] = week_start(attrs['from_date']), week_start(attrs['to_date'])
+        if attrs['to_date'] <= attrs['from_date']:
+            raise field_error('to_date', 'Переносить можно только вперёд — на более позднюю дату.')
+        return attrs

@@ -9,8 +9,8 @@ from django.db.models import Count as models_count, Sum
 from django.utils import timezone
 
 from .models import (
-    Bucket, Notification, Payment, PaymentKind, Project, ProjectStatus,
-    Server, ServerRenewal, ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout,
+    Bucket, Notification, Payment, PaymentKind, PlanItem, PlanPeriod, Project, ProjectStatus,
+    Server, ServerRenewal, ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout, week_start,
 )
 
 
@@ -474,3 +474,104 @@ def task_report(year: int, month: int, users) -> dict:
         'by_day': [{'date': d, 'done': n} for d, n in by_day.items()],
         'people': people,
     }
+
+
+# --------------------------------------------------------------------------- #
+#  Личный план: статистика
+# --------------------------------------------------------------------------- #
+def _rate(done, planned):
+    return round(done * 100 / planned) if planned else None
+
+
+def _plan_counts(items):
+    """{дата: [запланировано, выполнено]} — перенесённые считаются невыполненными."""
+    counts = {}
+    for it in items:
+        c = counts.setdefault(it.date, [0, 0])
+        c[0] += 1
+        c[1] += 1 if it.is_done else 0
+    return counts
+
+
+def plan_stats(user, days: int = 14, weeks: int = 8) -> dict:
+    """Выполнение личного плана: по дням, по неделям, серия дней с полностью выполненным планом."""
+    today = timezone.localdate()
+    first_day = today - timedelta(days=days - 1)
+    this_week = week_start(today)
+    first_week = this_week - timedelta(weeks=weeks - 1)
+
+    day_items = list(PlanItem.objects.filter(user=user, period=PlanPeriod.DAY, date__gte=first_day - timedelta(days=60), date__lte=today))
+    week_items = list(PlanItem.objects.filter(user=user, period=PlanPeriod.WEEK, date__gte=first_week, date__lte=this_week))
+    by_day = _plan_counts(day_items)
+    by_week = _plan_counts(week_items)
+    # для недели учитываем и дневные пункты внутри неё
+    week_with_days = {}
+    for d, (planned, done) in by_day.items():
+        w = week_with_days.setdefault(week_start(d), [0, 0])
+        w[0] += planned
+        w[1] += done
+
+    day_rows = []
+    for i in range(days):
+        d = first_day + timedelta(days=i)
+        planned, done = by_day.get(d, (0, 0))
+        day_rows.append({'date': d, 'planned': planned, 'done': done, 'rate': _rate(done, planned)})
+
+    week_rows = []
+    for i in range(weeks):
+        w = first_week + timedelta(weeks=i)
+        wp, wd = by_week.get(w, (0, 0))
+        dp, dd = week_with_days.get(w, (0, 0))
+        week_rows.append({'week': w, 'week_end': w + timedelta(days=6),
+                          'week_planned': wp, 'week_done': wd,
+                          'planned': wp + dp, 'done': wd + dd, 'rate': _rate(wd + dd, wp + dp)})
+
+    # серия: подряд идущие дни (назад от вчера, плюс сегодня, если план уже закрыт),
+    # в которые план был и выполнен полностью
+    streak, d = 0, today
+    planned, done = by_day.get(d, (0, 0))
+    if not (planned and done == planned):
+        d -= timedelta(days=1)
+    while True:
+        planned, done = by_day.get(d, (0, 0))
+        if not planned or done < planned:
+            break
+        streak += 1
+        d -= timedelta(days=1)
+
+    period_planned = sum(r['planned'] for r in day_rows)
+    period_done = sum(r['done'] for r in day_rows)
+    active_days = [r for r in day_rows if r['planned']]
+    return {
+        'today': today,
+        'days': day_rows,
+        'weeks': week_rows,
+        'streak': streak,
+        'summary': {
+            'planned': period_planned,
+            'done': period_done,
+            'rate': _rate(period_done, period_planned),
+            'days_with_plan': len(active_days),
+            'perfect_days': sum(1 for r in active_days if r['done'] == r['planned']),
+        },
+    }
+
+
+def team_plans() -> list:
+    """Сводка по команде за текущую неделю (для админа)."""
+    today = timezone.localdate()
+    monday = week_start(today)
+    users = list(User.objects.filter(is_active=True).order_by('full_name', 'username'))
+    items = list(PlanItem.objects.filter(date__gte=monday, date__lte=monday + timedelta(days=6)))
+    rows = []
+    for u in users:
+        mine = [it for it in items if it.user_id == u.id]
+        today_items = [it for it in mine if it.period == PlanPeriod.DAY and it.date == today]
+        planned, done = len(mine), sum(1 for it in mine if it.is_done)
+        rows.append({
+            'id': u.id, 'name': str(u), 'username': u.username, 'roles': u.roles,
+            'week_planned': planned, 'week_done': done, 'week_rate': _rate(done, planned),
+            'today_planned': len(today_items), 'today_done': sum(1 for it in today_items if it.is_done),
+        })
+    rows.sort(key=lambda r: (r['week_planned'] == 0, -(r['week_rate'] or 0), r['name']))
+    return rows

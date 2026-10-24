@@ -182,6 +182,7 @@ const NAV = [
   { title: 'Работа', items: [
     { to: '/dashboard', label: 'Дашборд', short: 'Главная', icon: 'dashboard', roles: ['admin'] },
     { to: '/tasks', label: 'Задачи', icon: 'kanban', badge: 'tasks' },
+    { to: '/plan', label: 'Мой план', short: 'План', icon: 'list-checks' },
     { to: '/me', label: 'Мои проекты', short: 'Проекты', icon: 'user', roles: ['worker'] },
     { to: '/tester', label: 'Проверка', icon: 'shield', roles: ['tester'], badge: 'review' },
     { to: '/analytics', label: 'Аналитика', icon: 'chart' },
@@ -198,7 +199,7 @@ const NAV = [
   ] },
 ]
 // нижняя панель на телефоне: 4 главных раздела, остальное — в «Ещё»
-const TAB_ORDER = ['/dashboard', '/tasks', '/projects', '/me', '/tester', '/analytics']
+const TAB_ORDER = ['/dashboard', '/tasks', '/plan', '/projects', '/me', '/tester', '/analytics']
 const visible = (item) => !item.roles || item.roles.some(r => auth.hasRole(r))
 const navGroups = computed(() => NAV
   .map(g => ({ ...g, items: g.items.filter(visible) }))
@@ -212,6 +213,7 @@ const inMore = computed(() => moreItems.value.some(i => route.path.startsWith(i.
 const titles = {
   '/dashboard': ['Обзор', 'Дашборд'],
   '/tasks': ['Канбан', 'Задачи'],
+  '/plan': ['День и неделя', 'Мой план'],
   '/analytics': ['Отчёт за месяц', 'Аналитика'],
   '/projects': ['Управление', 'Проекты'],
   '/debts': ['Кто сколько должен', 'Долги'],

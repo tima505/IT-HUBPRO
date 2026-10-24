@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from core.views import (
-    DebtsView, FinanceView, HistoryView, MyTokenObtainPairView, NotificationViewSet, ProjectViewSet,
+    DebtsView, FinanceView, HistoryView, MyTokenObtainPairView, NotificationViewSet, PlanViewSet, ProjectViewSet,
     ServerViewSet, SettingsView, SubTaskViewSet, TaskViewSet, UserViewSet, WorkerDashboardView, me,
 )
 
@@ -15,6 +15,7 @@ router.register('servers', ServerViewSet, basename='servers')
 router.register('notifications', NotificationViewSet, basename='notifications')
 router.register('tasks', TaskViewSet, basename='tasks')
 router.register('subtasks', SubTaskViewSet, basename='subtasks')
+router.register('plan', PlanViewSet, basename='plan')
 
 urlpatterns = [
     path('admin/', admin.site.urls),

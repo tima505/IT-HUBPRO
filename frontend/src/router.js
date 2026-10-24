@@ -17,6 +17,7 @@ const Settings = () => import('./views/admin/Settings.vue')
 const MyProjects = () => import('./views/worker/MyProjects.vue')
 const TesterHome = () => import('./views/tester/TesterHome.vue')
 const Tasks = () => import('./views/Tasks.vue')
+const Plan = () => import('./views/Plan.vue')
 const Analytics = () => import('./views/Analytics.vue')
 
 const admin = { role: 'admin' }
@@ -30,6 +31,7 @@ const routes = [
       { path: '', redirect: () => useAuth().home },
       // общие разделы — для любой роли
       { path: 'tasks', component: Tasks },
+      { path: 'plan', component: Plan },
       { path: 'analytics', component: Analytics },
       // суперадмин
       { path: 'dashboard', component: Dashboard, meta: admin },

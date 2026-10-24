@@ -499,3 +499,50 @@ class SubTask(models.Model):
 
     def __str__(self):
         return self.title
+
+
+# --------------------------------------------------------------------------- #
+#  Личный план на день / неделю
+# --------------------------------------------------------------------------- #
+class PlanPeriod(models.TextChoices):
+    DAY = 'day', 'День'
+    WEEK = 'week', 'Неделя'
+
+
+def week_start(d):
+    """Понедельник недели, в которую попадает дата."""
+    return d - timedelta(days=d.weekday())
+
+
+class PlanItem(models.Model):
+    """Пункт личного плана. У каждого пользователя — свой список.
+
+    date — день плана; для недельного плана — понедельник недели.
+    carried — пункт не выполнили и перенесли в следующий период (там создана копия);
+    в статистике своего периода он считается невыполненным.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='plan_items')
+    period = models.CharField('Период', max_length=5, choices=PlanPeriod.choices, default=PlanPeriod.DAY)
+    date = models.DateField('Дата')
+    title = models.CharField('Что сделать', max_length=300)
+    is_done = models.BooleanField(default=False)
+    done_at = models.DateTimeField(null=True, blank=True)
+    carried = models.BooleanField('Перенесено', default=False)
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['position', 'id']
+        indexes = [models.Index(fields=['user', 'period', 'date'])]
+
+    def save(self, *args, **kwargs):
+        if self.period == PlanPeriod.WEEK and self.date:
+            self.date = week_start(self.date)
+        if self.is_done and not self.done_at:
+            self.done_at = timezone.now()
+        elif not self.is_done:
+            self.done_at = None
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title

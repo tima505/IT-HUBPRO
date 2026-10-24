@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date as Date, timedelta
 
 from django.db import transaction
 from django.db.models import ProtectedError, Q
@@ -12,12 +12,12 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .exceptions import validate_or_raise
 from .models import (
-    Bucket, GlobalSettings, Notification, Payment, PaymentKind, Project,
+    Bucket, GlobalSettings, Notification, Payment, PaymentKind, PlanItem, PlanPeriod, Project,
     ProjectComment, ProjectStatus, ReviewStatus, Server, ServerRenewal,
-    ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout,
+    ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout, week_start,
 )
 from .serializers import (
-    AddPaymentSerializer, FinishSerializer, GlobalSettingsSerializer, MonthlyPaymentSerializer,
+    AddPaymentSerializer, CarryOverSerializer, FinishSerializer, PlanItemSerializer, GlobalSettingsSerializer, MonthlyPaymentSerializer,
     MyTokenObtainPairSerializer, NotificationSerializer, ProfileSerializer, ProjectCreateSerializer,
     ProjectSerializer, RenewSerializer, ServerSerializer, SubTaskSerializer, TaskSerializer,
     UserManageSerializer, UserSerializer, WorkerPayoutCreateSerializer, WorkerProjectSerializer,
@@ -26,7 +26,7 @@ from .serializers import (
 from .services import (
     _admins, _testers, activity_log, debts_summary, finance_breakdown, finance_summary, fund_balances,
     generate_notifications, generate_task_notifications, notify_review, notify_task_assigned,
-    refresh_server_statuses, task_report, worker_earnings,
+    plan_stats, refresh_server_statuses, task_report, team_plans, worker_earnings,
 )
 
 
@@ -540,6 +540,95 @@ class SubTaskViewSet(mixins.CreateModelMixin, mixins.UpdateModelMixin,
         task = serializer.validated_data['task']
         last = task.subtasks.order_by('-position').first()
         serializer.save(position=(last.position + 1) if last else 0)
+
+
+# --------------------------------------------------------------------------- #
+#  Личный план на день / неделю
+# --------------------------------------------------------------------------- #
+class PlanViewSet(viewsets.ModelViewSet):
+    """Свой план: менять можно только свои пункты.
+
+    Список: ?period=day|week&date=ГГГГ-ММ-ДД. Админ может посмотреть чужой план: &user=<id>.
+    """
+    serializer_class = PlanItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def _owner(self):
+        """Чей план показываем: свой, или (только админу и только для чтения) — чужой."""
+        user = self.request.user
+        other = self.request.query_params.get('user')
+        if other and other.isdigit() and int(other) != user.id and self.action in ('list', 'stats'):
+            if not user.is_admin:
+                return None
+            return User.objects.filter(pk=other).first()
+        return user
+
+    def get_queryset(self):
+        owner = self._owner()
+        if owner is None:
+            return PlanItem.objects.none()
+        qs = PlanItem.objects.filter(user=owner)
+        params = self.request.query_params
+        period = params.get('period')
+        if period in PlanPeriod.values:
+            qs = qs.filter(period=period)
+        date = params.get('date')
+        if date:
+            try:
+                d = Date.fromisoformat(date)
+            except ValueError:
+                return qs.none()
+            qs = qs.filter(date=week_start(d) if period == PlanPeriod.WEEK else d)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        if self._owner() is None:
+            return Response({'detail': 'Чужие планы может смотреть только администратор.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        data = serializer.validated_data
+        date = week_start(data['date']) if data.get('period') == PlanPeriod.WEEK else data['date']
+        last = PlanItem.objects.filter(user=self.request.user, period=data.get('period', PlanPeriod.DAY),
+                                       date=date).order_by('-position').first()
+        serializer.save(user=self.request.user, position=(last.position + 1) if last else 0)
+
+    @action(detail=False, methods=['post'])
+    def carry_over(self, request):
+        """Перенести невыполненные пункты в более поздний период (там создаются копии)."""
+        ser = CarryOverSerializer(data=request.data)
+        validate_or_raise(ser)
+        period, src, dst = (ser.validated_data[k] for k in ('period', 'from_date', 'to_date'))
+        undone = list(PlanItem.objects.filter(user=request.user, period=period, date=src,
+                                              is_done=False, carried=False))
+        if not undone:
+            return bad_request('Переносить нечего — всё выполнено или уже перенесено.')
+        last = PlanItem.objects.filter(user=request.user, period=period, date=dst).order_by('-position').first()
+        start = (last.position + 1) if last else 0
+        with transaction.atomic():
+            for i, item in enumerate(undone):
+                PlanItem.objects.create(user=request.user, period=period, date=dst, title=item.title, position=start + i)
+                item.carried = True
+                item.save(update_fields=['carried'])
+        items = PlanItem.objects.filter(user=request.user, period=period, date=dst)
+        return Response({'moved': len(undone), 'items': PlanItemSerializer(items, many=True).data})
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Статистика выполнения плана (своего или — админу — чужого: ?user=<id>)."""
+        owner = self._owner()
+        if owner is None:
+            return Response({'detail': 'Чужую статистику может смотреть только администратор.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        return Response(plan_stats(owner))
+
+    @action(detail=False, methods=['get'])
+    def team(self, request):
+        """Сводка по команде за текущую неделю — только админу."""
+        if not request.user.is_admin:
+            return Response({'detail': 'Только для администратора.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response(team_plans())
 
 
 # --------------------------------------------------------------------------- #
