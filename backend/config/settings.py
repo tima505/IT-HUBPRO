@@ -110,6 +110,7 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
     ),
+    'EXCEPTION_HANDLER': 'core.exceptions.exception_handler',
 }
 
 SIMPLE_JWT = {

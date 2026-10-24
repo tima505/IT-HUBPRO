@@ -1,12 +1,6 @@
 import { defineStore } from 'pinia'
 import api from '../api'
 
-export const CABINETS = [
-  { role: 'admin', to: '/dashboard', label: 'Панель админа', icon: 'dashboard' },
-  { role: 'worker', to: '/me', label: 'Мои проекты', icon: 'user' },
-  { role: 'tester', to: '/tester', label: 'Проверка', icon: 'check-circle' },
-]
-
 export const useAuth = defineStore('auth', {
   state: () => ({
     // храним в реактивном состоянии, чтобы геттеры пересчитывались
@@ -18,10 +12,10 @@ export const useAuth = defineStore('auth', {
     // роли совмещаются: ['admin', 'worker', 'tester'] в любом сочетании
     roles: (s) => s.user?.roles || [],
     isAdmin: (s) => (s.user?.roles || []).includes('admin'),
-    // разделы, куда пользователю можно зайти, — для переключателя кабинетов
-    cabinets: (s) => CABINETS.filter(c => (s.user?.roles || []).includes(c.role)),
-    // стартовая страница: админка, затем кабинет рабочего, затем тестировщика
-    home() { return this.cabinets[0]?.to || '/login' },
+    isWorker: (s) => (s.user?.roles || []).includes('worker'),
+    isTester: (s) => (s.user?.roles || []).includes('tester'),
+    // стартовая страница: админу — дашборд, остальным — свои задачи
+    home() { return this.isAdmin ? '/dashboard' : '/tasks' },
   },
   actions: {
     hasRole(role) { return this.roles.includes(role) },

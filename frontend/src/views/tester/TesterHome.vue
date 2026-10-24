@@ -1,7 +1,5 @@
 <template>
   <div class="wshell">
-    <CabinetHeader subtitle="кабинет тестировщика" role-label="Тестировщик" @tick="load" />
-
     <div class="wbody">
       <div class="stats">
         <div v-for="s in stats" :key="s.v" class="stat card animate-in" :class="{ on: tab === s.v }" @click="setTab(s.v)">
@@ -77,7 +75,6 @@
 import { ref, computed, onMounted } from 'vue'
 import api, { formatDate } from '../../api'
 import { useAuth } from '../../stores/auth'
-import CabinetHeader from '../../components/CabinetHeader.vue'
 import Modal from '../../components/Modal.vue'
 import Icon from '../../components/Icon.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
@@ -151,8 +148,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.wshell { min-height: 100vh; }
-.wbody { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
+.wbody { max-width: 1100px; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .stat { cursor: pointer; transition: transform .25s cubic-bezier(.16,1,.3,1), border-color .25s; }
 .stat:hover { transform: translateY(-2px); }
@@ -172,5 +168,5 @@ onMounted(load)
 .more-btn { border-radius: 999px; padding: 11px 22px; }
 .more-btn .chev { transition: transform .35s cubic-bezier(.16,1,.3,1); }
 .more-btn.open .chev { transform: rotate(180deg); }
-@media (max-width: 700px) { .stats { grid-template-columns: 1fr; } .wbody { padding: 20px 16px 50px; } }
+@media (max-width: 700px) { .stats { grid-template-columns: 1fr; }  }
 </style>

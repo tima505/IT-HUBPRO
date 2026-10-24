@@ -18,10 +18,12 @@ echo "=== 1/4: Сборка фронтенда ==="
 
 echo "=== 2/4: Упаковка проекта (db.sqlite3 и мусор исключены) ==="
 TAR="$(mktemp -u)_ithub.tgz"
+# macOS: без служебных файлов ._* и расширенных атрибутов
+export COPYFILE_DISABLE=1
 tar -czf "$TAR" \
     --exclude='.git' --exclude='.claude' --exclude='venv' --exclude='node_modules' \
     --exclude='__pycache__' --exclude='*.pyc' --exclude='db.sqlite3' \
-    --exclude='staticfiles' --exclude='.DS_Store' .
+    --exclude='staticfiles' --exclude='.DS_Store' --exclude='._*' --exclude='* 2.*' --exclude='*.sqlite3' .
 
 echo "=== 3/4: Загрузка на сервер ==="
 scp "$TAR" "$SERVER:/tmp/ithub_deploy.tgz"

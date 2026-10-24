@@ -18,3 +18,7 @@ frontend/dist/
 .claude/
 .env
 *.sqlite3
+
+# копии, которые создаёт синхронизация iCloud («файл 2.py»)
+* 2.*
+* 2

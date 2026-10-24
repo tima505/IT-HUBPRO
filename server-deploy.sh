@@ -89,6 +89,10 @@ if [ -f "$DB_FILE" ]; then
   ls -1t "$APP_DIR"/backups/db-*.sqlite3 | tail -n +11 | xargs -r rm -f
 fi
 
+# Тесты под Django этого сервера — ДО миграций: если что-то несовместимо,
+# деплой остановится, а база останется нетронутой (тесты идут на отдельной временной базе).
+python manage.py test core --noinput -v 1
+
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 python manage.py createadmin
@@ -148,6 +152,25 @@ read -r -d '' APP_BODY <<BODY || true
         alias $APP_DIR/backend/staticfiles/;
         access_log off;
         expires 30d;
+    }
+    # PWA: service worker, манифест и index.html всегда перепроверяются —
+    # иначе установленное приложение не получит обновление
+    location = /sw.js {
+        add_header Cache-Control "no-cache";
+        try_files \$uri =404;
+    }
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+    # сборка Vite: имена файлов с хэшем — можно кэшировать надолго
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
     }
     location / {
         try_files \$uri \$uri/ /index.html;

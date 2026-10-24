@@ -1,12 +1,17 @@
 <template>
   <div class="wshell">
-    <CabinetHeader subtitle="кабинет рабочего" role-label="Рабочий" @tick="loadData" />
-
     <div class="wbody">
-      <div class="hero card animate-in">
-        <div class="eyebrow">Ваш заработок</div>
-        <div class="hero-val mono">{{ money(data.total_earned) }}</div>
-        <div class="muted">Всего начислено вам с оплат клиентов по вашим проектам</div>
+      <div class="hero-row">
+        <div class="hero card animate-in">
+          <div class="eyebrow">Выплачено вам</div>
+          <div class="hero-val mono ok">{{ money(data.total_earned) }}</div>
+          <div class="muted small">по всем вашим проектам</div>
+        </div>
+        <div class="hero card animate-in d1">
+          <div class="eyebrow">Компания ещё должна</div>
+          <div class="hero-val mono warn">{{ money(data.total_owed) }}</div>
+          <div class="muted small">выплачивается по договорённости</div>
+        </div>
       </div>
 
       <div class="row between wrap gap-12 mt-24" style="margin-bottom: 14px">
@@ -32,20 +37,25 @@
           <h3 class="p-name">{{ p.name }}</h3>
           <div v-if="p.client_name || p.client_phone" class="muted small row gap-8"><Icon name="phone" :size="14" /> Клиент: {{ [p.client_name, p.client_phone].filter(Boolean).join(' · ') }}</div>
 
-          <div class="earn" v-if="p.has_price">
+          <p v-if="p.description" class="muted small desc">{{ p.description }}</p>
+
+          <div class="earn">
             <div class="row between">
               <span class="muted small">Ваша сумма за проект</span>
-              <span v-if="p.worker_amount" class="mono">{{ money(p.worker_amount) }}</span>
+              <b v-if="Number(p.worker_amount)" class="mono">{{ money(p.worker_amount) }}</b>
               <span v-else class="muted small">пока не указана</span>
             </div>
-            <div class="row between" style="margin-top: 8px; border-top: 1px solid var(--stroke); padding-top: 8px">
-              <span class="muted small">Начислено вам</span>
-              <span class="mono" style="font-size: 16px; font-weight: 800; color: var(--warn-fg)">{{ money(p.totals.worker) }}</span>
+            <template v-if="Number(p.worker_amount)">
+              <div class="row between"><span class="muted small">Выплачено</span><b class="mono ok">{{ money(p.worker_paid) }}</b></div>
+              <div class="progress"><span :style="{ width: Math.min(100, p.worker_paid / p.worker_amount * 100) + '%' }"></span></div>
+              <div class="row between"><span class="muted small">Осталось получить</span><b class="mono" :class="Number(p.worker_debt) > 0 ? 'warn' : 'ok'">{{ money(p.worker_debt) }}</b></div>
+            </template>
+            <div v-if="p.payouts.length" class="payouts">
+              <div v-for="po in p.payouts" :key="po.id" class="po">
+                <span class="muted small">{{ formatDate(po.date) }}<span v-if="po.note"> · {{ po.note }}</span></span>
+                <b class="mono small">{{ money(po.amount) }}</b>
+              </div>
             </div>
-          </div>
-          <div class="earn" v-if="p.has_monthly && !p.has_price">
-            <div class="muted small">Помесячный проект</div>
-            <div class="muted small">Оплата вашей работы обсуждается отдельно.</div>
           </div>
 
           <div class="dates">
@@ -112,7 +122,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import api, { money, formatDate } from '../../api'
-import CabinetHeader from '../../components/CabinetHeader.vue'
 import Modal from '../../components/Modal.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import Icon from '../../components/Icon.vue'
@@ -122,7 +131,7 @@ import ReviewThread from '../../components/ReviewThread.vue'
 import FilterBar from '../../components/FilterBar.vue'
 import { textMatch, inRange } from '../../filters'
 
-const data = ref({ projects: [], total_earned: 0 })
+const data = ref({ projects: [], total_earned: 0, total_owed: 0 })
 
 const VISIBLE_LIMIT = 3
 const expanded = ref(false)
@@ -173,23 +182,28 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.wshell { min-height: 100vh; }
 .strong { color: var(--text); }
 .review-line { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px; background: var(--input-bg); border: 1px solid var(--stroke); }
 .review-line.returned { border-color: var(--c-red); }
 .review-line.review { border-color: var(--brand); }
 .return-note { padding: 10px 12px; border-radius: 10px; background: var(--bad-bg); }
 .return-text { margin-top: 4px; font-size: 14px; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.wbody { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
+.wbody { max-width: 1100px; }
+.hero-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .hero { position: relative; overflow: hidden; }
-.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(300px 160px at 90% -10%, rgba(37,99,235,.18), transparent 70%); pointer-events: none; }
-.hero-val { font-size: 44px; font-weight: 800; letter-spacing: -.03em; margin: 8px 0; color: var(--brand); }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; position: relative; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(300px 160px at 90% -10%, rgba(99,102,241,.22), transparent 70%); pointer-events: none; }
+.hero-val { font-size: clamp(26px, 6vw, 38px); font-weight: 800; letter-spacing: -.03em; margin: 6px 0 2px; }
+.ok { color: var(--ok-fg); } .warn { color: var(--warn-fg); }
+.desc { margin: 0; line-height: 1.5; }
+.payouts { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px dashed var(--stroke-strong); }
+.po { display: flex; justify-content: space-between; gap: 8px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 16px; position: relative; }
 .pcard { transition: transform .25s cubic-bezier(.16,1,.3,1), border-color .25s, box-shadow .25s; }
 .pcard:hover { transform: translateY(-3px); border-color: var(--stroke-strong); box-shadow: var(--shadow); }
 .pcard { display: flex; flex-direction: column; gap: 12px; }
 .p-name { margin: 0; font-size: 18px; font-weight: 700; }
-.earn { padding: 14px; border-radius: 12px; background: var(--input-bg); display: flex; flex-direction: column; gap: 4px; }
+.earn { padding: 14px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--stroke); display: flex; flex-direction: column; gap: 8px; }
+@media (max-width: 640px) { .hero-row { grid-template-columns: 1fr; } }
 .dates { display: flex; justify-content: space-between; }
 .dates div { display: flex; flex-direction: column; gap: 3px; }
 .tab-count { opacity: .7; font-weight: 700; margin-left: 2px; }

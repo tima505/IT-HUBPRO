@@ -39,8 +39,8 @@
                   <b>{{ e.title }}</b>
                   <span v-if="e.project_name" class="muted">· {{ e.project_name }}</span>
                 </div>
-                <b v-if="e.amount" class="mono" :class="{ minus: e.type === 'server' }">
-                  {{ e.type === 'server' ? '−' : '+' }} {{ money(e.amount) }}
+                <b v-if="e.amount" class="mono" :class="{ minus: isExpense(e) }">
+                  {{ isExpense(e) ? '−' : '+' }} {{ money(e.amount) }}
                 </b>
               </div>
               <div v-if="e.text" class="ev-text muted small">{{ e.text }}</div>
@@ -73,11 +73,14 @@ const router = useRouter()
 const events = ref([])
 const loading = ref(true)
 
-const icons = { project: 'folder', payment: 'wallet', server: 'server', review: 'check-circle', comment: 'message' }
+const icons = { project: 'folder', payment: 'wallet', payout: 'user', server: 'server', review: 'check-circle', comment: 'message' }
+// расходы: серверы и выплаты рабочим
+const isExpense = (e) => e.type === 'server' || e.type === 'payout'
 const typeDefs = [
   { v: '', label: 'Все', icon: 'history' },
   { v: 'project', label: 'Проекты', icon: 'folder' },
   { v: 'payment', label: 'Платежи', icon: 'wallet' },
+  { v: 'payout', label: 'Выплаты', icon: 'user' },
   { v: 'server', label: 'Серверы', icon: 'server' },
   { v: 'review', label: 'Проверка', icon: 'check-circle' },
   { v: 'comment', label: 'Комментарии', icon: 'message' },
@@ -108,7 +111,7 @@ const projectOptions = computed(() => {
 
 // приход минус расход по выбранным событиям
 const sumShown = computed(() => shown.value.reduce((acc, e) =>
-  acc + (e.amount && e.type !== 'project' ? (e.type === 'server' ? -1 : 1) * Number(e.amount) : 0), 0))
+  acc + (e.amount && e.type !== 'project' ? (isExpense(e) ? -1 : 1) * Number(e.amount) : 0), 0))
 
 const limit = ref(60)
 watch([type, q, projectFilter, dateFrom, dateTo], () => { limit.value = 60 })
@@ -156,6 +159,7 @@ onMounted(async () => {
 .ev.link:hover { background: var(--hover); }
 .ev-ico { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; background: var(--info-bg); color: var(--info-fg); }
 .ev-ico.payment { background: var(--ok-bg); color: var(--ok-fg); }
+.ev-ico.payout { background: var(--warn-bg); color: var(--warn-fg); }
 .ev-ico.server { background: var(--warn-bg); color: var(--warn-fg); }
 .ev-ico.review { background: var(--neutral-bg); color: var(--text); }
 .ev-ico.comment { background: var(--card-2); color: var(--muted); }

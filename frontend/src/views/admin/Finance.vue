@@ -37,7 +37,7 @@
     </div>
 
     <div class="grid-3 mt-24">
-      <StatCard class="animate-in d4" label="Всего поступлений" :value="fin.total_income" icon="trending-up" color="#2563eb" />
+      <StatCard class="animate-in d4" label="Всего поступлений" :value="fin.total_income" icon="trending-up" color="#6366f1" />
       <StatCard class="animate-in d5" label="Выплачено рабочим" :value="fin.worker_payouts" icon="user" color="#d97706" />
       <StatCard class="animate-in d6" label="Расходы на серверы" :value="fin.server_expense" icon="server" color="#dc2626" />
     </div>

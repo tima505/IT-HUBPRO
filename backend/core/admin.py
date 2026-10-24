@@ -1,7 +1,9 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import Notification, Payment, Project, ProjectComment, Server, ServerRenewal, User
+from .models import (
+    Notification, Payment, Project, ProjectComment, Server, ServerRenewal, SubTask, Task, User, WorkerPayout,
+)
 
 
 @admin.register(User)
@@ -30,3 +32,6 @@ admin.site.register(ProjectComment)
 admin.site.register(Server)
 admin.site.register(ServerRenewal)
 admin.site.register(Notification)
+admin.site.register(WorkerPayout)
+admin.site.register(Task)
+admin.site.register(SubTask)

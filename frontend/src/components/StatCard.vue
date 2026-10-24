@@ -1,7 +1,7 @@
 <template>
   <div class="card stat" :style="{ '--accent-col': color }">
-    <div class="row between">
-      <div class="icon"><Icon :name="icon" :size="20" /></div>
+    <div class="row between wrap gap-8">
+      <div class="stat-ico"><Icon :name="icon" :size="20" /></div>
       <span v-if="badge" class="badge" :class="badgeType">{{ badge }}</span>
     </div>
     <div class="value mono">{{ display }}</div>
@@ -61,12 +61,17 @@ watch(() => props.value, (v) => {
   background: radial-gradient(120px 80px at 90% 0%, color-mix(in srgb, var(--accent-col) 30%, transparent), transparent 70%);
   pointer-events: none;
 }
-.icon {
+.stat-ico {
   width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
   color: var(--accent-col);
   background: color-mix(in srgb, var(--accent-col) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-col) 32%, transparent);
 }
 .value { font-size: 26px; font-weight: 800; margin-top: 16px; letter-spacing: -.02em; }
+@media (max-width: 520px) {
+  .stat-ico { width: 36px; height: 36px; border-radius: 10px; }
+  .value { font-size: 21px; margin-top: 12px; }
+  .badge { font-size: 11px; padding: 3px 8px; white-space: normal; }
+}
 .label { margin-top: 4px; }
 </style>

@@ -31,7 +31,7 @@
         <div class="ustats">
           <template v-if="u.roles.includes('worker')">
             <div><div class="muted small">Проектов</div><b>{{ u.projects_count }}</b></div>
-            <div><div class="muted small">Заработал</div><b class="mono">{{ money(u.total_earned) }}</b></div>
+            <div><div class="muted small">Выплачено</div><b class="mono">{{ money(u.total_earned) }}</b></div>
           </template>
           <div v-if="u.roles.includes('tester')"><div class="muted small">Проверил проектов</div><b>{{ u.reviewed_count }}</b></div>
           <div v-if="u.roles.includes('admin')" class="full muted small">Полный доступ: проекты, финансы, серверы, пользователи.</div>

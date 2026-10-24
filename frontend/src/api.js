@@ -1,4 +1,22 @@
 import axios from 'axios'
+import { ref } from 'vue'
+
+// Всплывающая ошибка (показывается в App.vue)
+export const toast = ref('')
+let toastTimer = null
+export function showError(message) {
+  toast.value = message
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = '' }, 6000)
+}
+
+// Понятный текст ошибки из ответа API (бэкенд всегда кладёт его в `detail`)
+export function errorMessage(e, fallback = 'Не удалось выполнить действие') {
+  const data = e?.response?.data
+  if (typeof data?.detail === 'string') return data.detail
+  if (!e?.response) return 'Нет связи с сервером'
+  return fallback
+}
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -16,6 +34,9 @@ api.interceptors.response.use(
       const { useAuth } = await import('./stores/auth')
       try { useAuth().logout() } catch { localStorage.removeItem('access') }
       if (location.hash !== '#/login') location.hash = '#/login'
+    } else if (!error.config?.silentError && error.config?.method !== 'get') {
+      // ошибки изменяющих запросов показываем всегда, если страница не обрабатывает их сама
+      showError(errorMessage(error))
     }
     return Promise.reject(error)
   }
