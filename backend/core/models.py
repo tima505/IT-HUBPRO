@@ -126,6 +126,19 @@ class Bucket(models.TextChoices):
     COMPANY = 'company', 'Деньги компании'
 
 
+class Payer(models.TextChoices):
+    """Кто платит за сервер: компания (из выбранного фонда) или клиент отдельно."""
+    COMPANY = 'company', 'Компания'
+    CLIENT = 'client', 'Клиент'
+
+
+def term_end(start, months=None, days=None):
+    """Конец срока: N календарных месяцев (6 мес, 1 год) или N дней от даты начала."""
+    if months:
+        return add_months(start, months)
+    return start + timedelta(days=days or 0)
+
+
 class ProjectStatus(models.TextChoices):
     ACTIVE = 'active', 'В работе'
     DONE = 'done', 'Завершён'
@@ -357,9 +370,11 @@ class Server(models.Model):
         related_name='servers', verbose_name='Проект',
     )
     purchase_date = models.DateField('Дата покупки', default=timezone.localdate)
+    months = models.PositiveIntegerField('Куплен на (месяцев)', null=True, blank=True)
     days = models.PositiveIntegerField('Куплен на (дней)')
     expiry_date = models.DateField('Действует до')
     amount = models.DecimalField('Стоимость', max_digits=14, decimal_places=2, default=Decimal('0'))
+    paid_by = models.CharField('Кто платит', max_length=10, choices=Payer.choices, default=Payer.COMPANY)
     paid_from = models.CharField('Оплачено из', max_length=10, choices=Bucket.choices)
     status = models.CharField(max_length=10, choices=ServerStatus.choices, default=ServerStatus.ACTIVE)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -368,8 +383,10 @@ class Server(models.Model):
         ordering = ['expiry_date']
 
     def save(self, *args, **kwargs):
+        if self.months and self.purchase_date and not self.days:
+            self.days = (term_end(self.purchase_date, months=self.months) - self.purchase_date).days
         if not self.expiry_date and self.purchase_date and self.days:
-            self.expiry_date = self.purchase_date + timedelta(days=self.days)
+            self.expiry_date = term_end(self.purchase_date, self.months, self.days)
         super().save(*args, **kwargs)
 
     @property
@@ -384,9 +401,11 @@ class ServerRenewal(models.Model):
     """Продление сервера."""
     server = models.ForeignKey(Server, on_delete=models.CASCADE, related_name='renewals')
     date = models.DateField(default=timezone.localdate)
+    months = models.PositiveIntegerField('Продлён на (месяцев)', null=True, blank=True)
     days = models.PositiveIntegerField('Продлён на (дней)')
     new_expiry = models.DateField('Новая дата окончания')
     amount = models.DecimalField('Стоимость', max_digits=14, decimal_places=2, default=Decimal('0'))
+    paid_by = models.CharField('Кто платит', max_length=10, choices=Payer.choices, default=Payer.COMPANY)
     paid_from = models.CharField('Оплачено из', max_length=10, choices=Bucket.choices)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -546,3 +565,37 @@ class PlanItem(models.Model):
 
     def __str__(self):
         return self.title
+
+
+# --------------------------------------------------------------------------- #
+#  Расходы компании
+# --------------------------------------------------------------------------- #
+class ExpenseCategory(models.TextChoices):
+    OFFICE = 'office', 'Аренда и офис'
+    SALARY = 'salary', 'Зарплата и бонусы'
+    MARKETING = 'marketing', 'Реклама и маркетинг'
+    SERVICES = 'services', 'Сервисы и подписки'
+    EQUIPMENT = 'equipment', 'Техника и оборудование'
+    TAXES = 'taxes', 'Налоги и банк'
+    OTHER = 'other', 'Прочее'
+
+
+class Expense(models.Model):
+    """Расход компании, записанный вручную: списывается из выбранного фонда."""
+    date = models.DateField('Дата', default=timezone.localdate)
+    amount = models.DecimalField('Сумма', max_digits=14, decimal_places=2)
+    category = models.CharField('Категория', max_length=12, choices=ExpenseCategory.choices,
+                                default=ExpenseCategory.OTHER)
+    title = models.CharField('На что', max_length=200)
+    note = models.CharField('Комментарий', max_length=255, blank=True)
+    paid_from = models.CharField('Из какого фонда', max_length=10, choices=Bucket.choices, default=Bucket.COMPANY)
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='expenses', verbose_name='Проект')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date', '-id']
+
+    def __str__(self):
+        return f'{self.title} — {self.amount}'

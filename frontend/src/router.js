@@ -8,6 +8,7 @@ const Projects = () => import('./views/admin/Projects.vue')
 const ProjectDetail = () => import('./views/admin/ProjectDetail.vue')
 const ProjectForm = () => import('./views/admin/ProjectForm.vue')
 const Debts = () => import('./views/admin/Debts.vue')
+const Expenses = () => import('./views/admin/Expenses.vue')
 const Users = () => import('./views/admin/Users.vue')
 const History = () => import('./views/admin/History.vue')
 const Finance = () => import('./views/admin/Finance.vue')
@@ -40,6 +41,7 @@ const routes = [
       { path: 'projects/:id(\\d+)', component: ProjectDetail, meta: admin },
       { path: 'projects/:id(\\d+)/edit', component: ProjectForm, meta: admin },
       { path: 'debts', component: Debts, meta: admin },
+      { path: 'expenses', component: Expenses, meta: admin },
       { path: 'users', component: Users, meta: admin },
       { path: 'workers', redirect: '/users' },
       { path: 'finance', component: Finance, meta: admin },

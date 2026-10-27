@@ -7,9 +7,9 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import (
-    Bucket, GlobalSettings, Notification, Payment, PaymentKind, Project,
+    Bucket, Expense, GlobalSettings, Notification, Payer, Payment, PaymentKind, Project,
     PlanItem, ProjectComment, ReviewStatus, Server, ServerRenewal, SubTask, Task, TaskStatus, User,
-    WorkerPayout, money,
+    WorkerPayout, money, term_end,
 )
 
 
@@ -323,27 +323,38 @@ class FinishSerializer(serializers.Serializer):
         return value
 
 
+def validate_term(attrs, months_key='months', days_key='days', field='months'):
+    """Срок: месяцы (1, 3, 6, 12…) или дни — что-то одно обязательно."""
+    if not attrs.get(months_key) and not attrs.get(days_key):
+        raise field_error(field, 'Укажите срок: на сколько месяцев или дней.')
+
+
 class RenewSerializer(serializers.Serializer):
-    days = serializers.IntegerField(min_value=1, label='Количество дней')
+    months = serializers.IntegerField(min_value=1, max_value=60, required=False, allow_null=True, label='Месяцев')
+    days = serializers.IntegerField(min_value=1, required=False, allow_null=True, label='Количество дней')
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0'),
                                       default=Decimal('0'), label='Стоимость')
+    paid_by = serializers.ChoiceField(choices=Payer.choices, default=Payer.COMPANY, label='Кто платит')
     paid_from = serializers.ChoiceField(choices=Bucket.choices, default=Bucket.COMPANY, label='Оплачено из')
 
     def validate(self, attrs):
-        check_balance(attrs['paid_from'], attrs['amount'])
+        validate_term(attrs)
+        if attrs['paid_by'] == Payer.COMPANY:
+            check_balance(attrs['paid_from'], attrs['amount'])
         return attrs
 
 
 class ServerRenewalSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServerRenewal
-        fields = ['id', 'server', 'date', 'days', 'new_expiry', 'amount', 'paid_from', 'created_at']
+        fields = ['id', 'server', 'date', 'months', 'days', 'new_expiry', 'amount', 'paid_by', 'paid_from', 'created_at']
         read_only_fields = ['new_expiry']
 
 
 class ServerSerializer(serializers.ModelSerializer):
     days_left = serializers.IntegerField(read_only=True)
     paid_from_display = serializers.CharField(source='get_paid_from_display', read_only=True)
+    paid_by_display = serializers.CharField(source='get_paid_by_display', read_only=True)
     project_name = serializers.CharField(source='project.name', read_only=True, default=None)
     renewals = ServerRenewalSerializer(many=True, read_only=True)
     # логин/пароль можно указать позже — не блокируем покупку
@@ -353,35 +364,55 @@ class ServerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Server
         fields = ['id', 'label', 'login', 'password', 'project', 'project_name',
-                  'purchase_date', 'days', 'expiry_date', 'amount', 'paid_from',
-                  'paid_from_display', 'status', 'days_left', 'renewals', 'created_at']
+                  'purchase_date', 'months', 'days', 'expiry_date', 'amount', 'paid_by', 'paid_by_display',
+                  'paid_from', 'paid_from_display', 'status', 'days_left', 'renewals', 'created_at']
         read_only_fields = ['expiry_date', 'status']
         extra_kwargs = {
-            'days': {'min_value': 1},
+            'months': {'min_value': 1, 'max_value': 60},
+            'days': {'min_value': 1, 'required': False},
             'amount': {'min_value': Decimal('0')},
+            'paid_from': {'required': False},
         }
 
     def validate(self, attrs):
         inst = self.instance
+        if not inst:
+            validate_term(attrs)
+        elif 'months' in attrs and attrs['months'] and 'days' not in attrs:
+            attrs['days'] = None  # срок задан месяцами — дни пересчитаются
+        payer = attrs.get('paid_by', inst.paid_by if inst else Payer.COMPANY)
         bucket = attrs.get('paid_from', inst.paid_from if inst else Bucket.COMPANY)
+        attrs.setdefault('paid_from', bucket)
         amount = attrs.get('amount', inst.amount if inst else Decimal('0'))
-        # при редактировании старая сумма возвращается в ту же корзину
-        refund = inst.amount if inst and inst.paid_from == bucket else Decimal('0')
-        if not inst or 'amount' in attrs or 'paid_from' in attrs:
-            check_balance(bucket, amount, refund)
+        if payer == Payer.COMPANY:
+            # при редактировании старая сумма возвращается в ту же корзину
+            refund = inst.amount if inst and inst.paid_by == Payer.COMPANY and inst.paid_from == bucket else Decimal('0')
+            if not inst or {'amount', 'paid_from', 'paid_by'} & set(attrs):
+                check_balance(bucket, amount, refund)
         return attrs
+
+    @staticmethod
+    def _term(purchase, months, days):
+        end = term_end(purchase, months, days)
+        return end, (end - purchase).days
 
     def create(self, validated_data):
         purchase = validated_data['purchase_date']
-        validated_data['expiry_date'] = purchase + timedelta(days=validated_data['days'])
+        end, days = self._term(purchase, validated_data.get('months'), validated_data.get('days'))
+        validated_data.update(expiry_date=end, days=days)
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
         # изменили дату покупки/срок — сдвигаем окончание на ту же разницу
         # (уже сделанные продления сохраняются)
-        old_end = instance.purchase_date + timedelta(days=instance.days)
-        new_end = (validated_data.get('purchase_date', instance.purchase_date)
-                   + timedelta(days=validated_data.get('days', instance.days)))
+        old_end = term_end(instance.purchase_date, instance.months, instance.days)
+        months = validated_data.get('months', instance.months)
+        days = validated_data.get('days', instance.days)
+        if 'days' in validated_data and validated_data['days'] and 'months' not in validated_data:
+            months = None  # перешли на срок в днях
+            validated_data['months'] = None
+        new_end, new_days = self._term(validated_data.get('purchase_date', instance.purchase_date), months, days)
+        validated_data['days'] = new_days
         if new_end != old_end:
             validated_data['expiry_date'] = instance.expiry_date + (new_end - old_end)
         return super().update(instance, validated_data)
@@ -567,18 +598,23 @@ class ProjectCreateSerializer(ProjectSerializer):
     server_label = serializers.CharField(write_only=True, required=False, allow_blank=True)
     server_login = serializers.CharField(write_only=True, required=False, allow_blank=True)
     server_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    server_days = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    server_months = serializers.IntegerField(write_only=True, required=False, allow_null=True,
+                                             min_value=1, max_value=60, label='Срок сервера (месяцев)')
+    server_days = serializers.IntegerField(write_only=True, required=False, allow_null=True, min_value=1)
     server_amount = serializers.DecimalField(
         max_digits=14, decimal_places=2, write_only=True, required=False, allow_null=True)
+    server_paid_by = serializers.ChoiceField(
+        choices=Payer.choices, write_only=True, required=False, default=Payer.COMPANY, label='Кто платит за сервер')
     server_paid_from = serializers.ChoiceField(
         choices=Bucket.choices, write_only=True, required=False, allow_blank=True)
-    server_purchase_date = serializers.DateField(write_only=True, required=False, allow_null=True)
+    server_purchase_date = serializers.DateField(write_only=True, required=False, allow_null=True,
+                                                 label='Дата покупки сервера')
 
     class Meta(ProjectSerializer.Meta):
         fields = ProjectSerializer.Meta.fields + [
             'prepayment', 'prepayment_date',
-            'has_server', 'server_label', 'server_login', 'server_password',
-            'server_days', 'server_amount', 'server_paid_from', 'server_purchase_date']
+            'has_server', 'server_label', 'server_login', 'server_password', 'server_months',
+            'server_days', 'server_amount', 'server_paid_by', 'server_paid_from', 'server_purchase_date']
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -591,15 +627,15 @@ class ProjectCreateSerializer(ProjectSerializer):
         if attrs.get('has_monthly') and not attrs.get('monthly_amount'):
             raise field_error('monthly_amount', 'Укажите сумму ежемесячной оплаты.')
         if attrs.get('has_server'):
-            if not attrs.get('server_days') or attrs['server_days'] <= 0:
-                raise field_error('server_days', 'Укажите срок сервера (дней).')
+            validate_term(attrs, 'server_months', 'server_days', 'server_months')
             amount = attrs.get('server_amount') or Decimal('0')
             if amount < 0:
                 raise field_error('server_amount', 'Стоимость сервера не может быть отрицательной.')
-            bucket = attrs.get('server_paid_from') or Bucket.COMPANY
-            # сервер можно оплатить и из предоплаты, которая придёт вместе с проектом
-            share = prepayment_share(prepayment, bucket, attrs.get('fund1_rate'), attrs.get('fund2_rate'))
-            check_balance(bucket, amount, refund=share, field='server_amount')
+            if attrs.get('server_paid_by', Payer.COMPANY) == Payer.COMPANY:
+                bucket = attrs.get('server_paid_from') or Bucket.COMPANY
+                # сервер можно оплатить и из предоплаты, которая придёт вместе с проектом
+                share = prepayment_share(prepayment, bucket, attrs.get('fund1_rate'), attrs.get('fund2_rate'))
+                check_balance(bucket, amount, refund=share, field='server_amount')
         return attrs
 
     def create(self, validated_data):
@@ -611,7 +647,9 @@ class ProjectCreateSerializer(ProjectSerializer):
             'label': validated_data.pop('server_label', ''),
             'login': validated_data.pop('server_login', ''),
             'password': validated_data.pop('server_password', ''),
+            'months': validated_data.pop('server_months', None),
             'days': validated_data.pop('server_days', None),
+            'paid_by': validated_data.pop('server_paid_by', Payer.COMPANY),
             'amount': validated_data.pop('server_amount', None) or Decimal('0'),
             'paid_from': validated_data.pop('server_paid_from', '') or Bucket.COMPANY,
             'purchase_date': validated_data.pop('server_purchase_date', None),
@@ -623,17 +661,20 @@ class ProjectCreateSerializer(ProjectSerializer):
                 Payment.objects.create(project=project, kind=PaymentKind.PAYMENT, amount=prepayment,
                                        date=prepayment_date or timezone.localdate(),
                                        note='Предоплата', created_by=user)
-            if has_server and server_fields['days']:
+            if has_server and (server_fields['months'] or server_fields['days']):
                 purchase = server_fields['purchase_date'] or timezone.localdate()
+                end = term_end(purchase, server_fields['months'], server_fields['days'])
                 Server.objects.create(
                     project=project,
                     label=server_fields['label'] or f'Сервер: {project.name}',
                     login=server_fields['login'],
                     password=server_fields['password'],
                     purchase_date=purchase,
-                    days=server_fields['days'],
-                    expiry_date=purchase + timedelta(days=server_fields['days']),
+                    months=server_fields['months'],
+                    days=(end - purchase).days,
+                    expiry_date=end,
                     amount=server_fields['amount'],
+                    paid_by=server_fields['paid_by'],
                     paid_from=server_fields['paid_from'],
                 )
         return project
@@ -795,4 +836,38 @@ class CarryOverSerializer(serializers.Serializer):
             attrs['from_date'], attrs['to_date'] = week_start(attrs['from_date']), week_start(attrs['to_date'])
         if attrs['to_date'] <= attrs['from_date']:
             raise field_error('to_date', 'Переносить можно только вперёд — на более позднюю дату.')
+        return attrs
+
+
+# --------------------------------------------------------------------------- #
+#  Расходы
+# --------------------------------------------------------------------------- #
+class ExpenseSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    paid_from_display = serializers.CharField(source='get_paid_from_display', read_only=True)
+    project_name = serializers.CharField(source='project.name', read_only=True, default=None)
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Expense
+        fields = ['id', 'date', 'amount', 'category', 'category_display', 'title', 'note',
+                  'paid_from', 'paid_from_display', 'project', 'project_name', 'created_by_name', 'created_at']
+        extra_kwargs = {'amount': {'min_value': Decimal('0.01')}, 'date': {'validators': [validate_not_future]}}
+
+    def get_created_by_name(self, obj):
+        return str(obj.created_by) if obj.created_by_id else None
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Напишите, на что потрачено.')
+        return value
+
+    def validate(self, attrs):
+        inst = self.instance
+        bucket = attrs.get('paid_from', inst.paid_from if inst else Bucket.COMPANY)
+        amount = attrs.get('amount', inst.amount if inst else Decimal('0'))
+        refund = inst.amount if inst and inst.paid_from == bucket else Decimal('0')
+        if not inst or 'amount' in attrs or 'paid_from' in attrs:
+            check_balance(bucket, amount, refund)
         return attrs

@@ -888,3 +888,104 @@ class PlanTests(TestCase):
         self.assertEqual((rows['w']['week_planned'], rows['w']['week_done'], rows['w']['week_rate']), (2, 1, 50))
         self.assertEqual((rows['w']['today_planned'], rows['w']['today_done']), (2, 1))
         self.assertEqual(self.as_w.get('/api/plan/team/').status_code, 403)
+
+
+# --------------------------------------------------------------------------- #
+#  Серверы: срок в месяцах, кто платит; расходы и отчёт
+# --------------------------------------------------------------------------- #
+from .models import Expense, Payer
+
+
+class ServerTermPayerTests(BaseAPITest):
+    def buy(self, **kw):
+        data = {'label': 'VPS', 'purchase_date': '2026-01-31', 'months': 6, 'amount': 60000,
+                'paid_by': 'company', 'paid_from': 'company'}
+        data.update(kw)
+        return self.api.post('/api/servers/', data, format='json')
+
+    def test_months_term_is_calendar(self):
+        self.income(200000)
+        r = self.buy()
+        self.assertEqual(r.status_code, 201, r.json())
+        self.assertEqual((r.json()['expiry_date'], r.json()['months']), ('2026-07-31', 6))
+        r = self.buy(purchase_date='2026-03-15', months=12)
+        self.assertEqual(r.json()['expiry_date'], '2027-03-15')
+
+    def test_term_required(self):
+        r = self.buy(months=None)
+        self.assertEqual(r.status_code, 400)
+
+    def test_client_paid_server_does_not_touch_funds(self):
+        r = self.buy(paid_by='client', amount=500000)  # денег у компании нет — но платит клиент
+        self.assertEqual(r.status_code, 201, r.json())
+        self.assertEqual(fund_balances()[Bucket.COMPANY]['balance'], Decimal('0'))
+        self.assertEqual(self.buy(paid_by='company', amount=1).status_code, 400)
+
+    def test_renew_by_months_and_client(self):
+        s = self.server(expiry_date=date(2030, 1, 31))
+        r = self.post(f'/api/servers/{s.id}/renew/', {'months': 6, 'amount': 30000, 'paid_by': 'client'})
+        self.assertEqual(r.status_code, 200, r.json())
+        self.assertEqual(r.json()['expiry_date'], '2030-07-31')
+        self.assertEqual(fund_balances()[Bucket.COMPANY]['expense'], Decimal('0'))
+        self.assertEqual(self.post(f'/api/servers/{s.id}/renew/', {'amount': 1}).status_code, 400)
+
+    def test_project_with_client_paid_server(self):
+        r = self.api.post('/api/projects/', {
+            'name': 'X', 'worker': self.worker.id, 'price': 100000, 'start_date': '2026-03-01',
+            'deadline_date': '2026-04-01', 'has_server': True, 'server_months': 12, 'server_amount': 90000,
+            'server_paid_by': 'client', 'server_purchase_date': '2026-03-01'}, format='json')
+        self.assertEqual(r.status_code, 201, r.json())
+        srv = r.json()['servers'][0]
+        self.assertEqual((srv['paid_by'], srv['expiry_date'], srv['months']), ('client', '2027-03-01', 12))
+
+
+class ExpenseTests(BaseAPITest):
+    def spend(self, **kw):
+        data = {'title': 'Аренда офиса', 'amount': 50000, 'category': 'office',
+                'paid_from': 'company', 'date': timezone.localdate().isoformat()}
+        data.update(kw)
+        return self.api.post('/api/expenses/', data, format='json')
+
+    def test_expense_from_fund_with_balance_check(self):
+        self.assertEqual(self.spend().status_code, 400)  # денег ещё нет
+        self.income(100000)  # компании 75 000, фонд 20% — 20 000
+        r = self.spend()
+        self.assertEqual(r.status_code, 201, r.json())
+        self.assertEqual(fund_balances()[Bucket.COMPANY]['balance'], Decimal('25000.00'))
+        self.assertEqual(self.spend(paid_from='fund20', amount=25000).status_code, 400)
+        self.assertEqual(self.spend(paid_from='fund20', amount=20000).status_code, 201)
+        self.assertEqual(fund_balances()[Bucket.FUND20]['balance'], Decimal('0'))
+
+    def test_edit_counts_own_amount_and_delete_returns_money(self):
+        self.income(100000)
+        eid = self.spend(amount=75000).json()['id']
+        self.assertEqual(self.api.patch(f'/api/expenses/{eid}/', {'amount': 70000}, format='json').status_code, 200)
+        self.api.delete(f'/api/expenses/{eid}/')
+        self.assertEqual(fund_balances()[Bucket.COMPANY]['balance'], Decimal('75000.00'))
+
+    def test_validation_and_access(self):
+        self.income(100000)
+        future = (timezone.localdate() + timedelta(days=2)).isoformat()
+        for bad in ({'amount': 0}, {'title': '  '}, {'category': 'xxx'}, {'date': future}):
+            self.assertEqual(self.spend(**bad).status_code, 400, bad)
+        self.assertEqual(self.worker_api.get('/api/expenses/').status_code, 403)
+
+    def test_report_collects_all_outflows(self):
+        self.income(400000)  # компании 300 000, фонд 20% — 80 000
+        today = timezone.localdate()
+        self.spend(amount=50000)
+        self.spend(title='Реклама', category='marketing', amount=30000, paid_from='fund20')
+        self.server(purchase_date=today, amount=Decimal('20000'), expiry_date=today + timedelta(days=30))
+        self.server(purchase_date=today, amount=Decimal('99000'), paid_by=Payer.CLIENT,
+                    expiry_date=today + timedelta(days=30))
+        self.post(f'/api/projects/{self.p.id}/pay_worker/', {'amount': 40000})
+        Expense.objects.create(title='Старый', amount=Decimal('1'), date=today - timedelta(days=400))
+
+        data = self.api.get(f'/api/expenses/report/?from={today.replace(day=1)}&to={today}').json()
+        self.assertEqual(data['total'], 140000)
+        self.assertEqual(data['count'], 4)
+        self.assertEqual({c['key']: c['amount'] for c in data['by_category']},
+                         {'office': 50000, 'payouts': 40000, 'marketing': 30000, 'servers': 20000})
+        self.assertEqual({f['key']: f['amount'] for f in data['by_fund']}, {'company': 110000, 'fund20': 30000})
+        self.assertEqual((len(data['client_paid']), data['client_paid_total']), (1, 99000))
+        self.assertEqual(self.api.get('/api/expenses/report/?from=2026-05-01&to=2026-01-01').status_code, 400)

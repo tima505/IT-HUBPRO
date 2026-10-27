@@ -73,14 +73,15 @@ const router = useRouter()
 const events = ref([])
 const loading = ref(true)
 
-const icons = { project: 'folder', payment: 'wallet', payout: 'user', server: 'server', review: 'check-circle', comment: 'message' }
+const icons = { project: 'folder', payment: 'wallet', payout: 'user', expense: 'receipt', server: 'server', review: 'check-circle', comment: 'message' }
 // расходы: серверы и выплаты рабочим
-const isExpense = (e) => e.type === 'server' || e.type === 'payout'
+const isExpense = (e) => ['server', 'payout', 'expense'].includes(e.type)
 const typeDefs = [
   { v: '', label: 'Все', icon: 'history' },
   { v: 'project', label: 'Проекты', icon: 'folder' },
   { v: 'payment', label: 'Платежи', icon: 'wallet' },
   { v: 'payout', label: 'Выплаты', icon: 'user' },
+  { v: 'expense', label: 'Расходы', icon: 'receipt' },
   { v: 'server', label: 'Серверы', icon: 'server' },
   { v: 'review', label: 'Проверка', icon: 'check-circle' },
   { v: 'comment', label: 'Комментарии', icon: 'message' },
@@ -159,6 +160,7 @@ onMounted(async () => {
 .ev.link:hover { background: var(--hover); }
 .ev-ico { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; background: var(--info-bg); color: var(--info-fg); }
 .ev-ico.payment { background: var(--ok-bg); color: var(--ok-fg); }
+.ev-ico.expense { background: var(--bad-bg); color: var(--bad-fg); }
 .ev-ico.payout { background: var(--warn-bg); color: var(--warn-fg); }
 .ev-ico.server { background: var(--warn-bg); color: var(--warn-fg); }
 .ev-ico.review { background: var(--neutral-bg); color: var(--text); }

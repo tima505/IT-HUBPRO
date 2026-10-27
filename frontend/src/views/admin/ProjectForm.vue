@@ -2,7 +2,13 @@
   <div class="pf">
     <div class="pf-head">
       <button class="btn ghost sm" @click="back"><Icon name="arrow-left" :size="16" /> {{ isEdit ? 'К проекту' : 'К проектам' }}</button>
-      <div v-if="!workers.length && loaded" class="badge amber"><Icon name="alert" :size="13" /> Сначала создайте рабочего во вкладке «Рабочие»</div>
+      <div v-if="!workers.length && loaded" class="badge amber"><Icon name="alert" :size="13" /> Сначала создайте рабочего во вкладке «Пользователи»</div>
+    </div>
+
+    <div v-if="draft.restoredAt.value" class="draft-bar">
+      <Icon name="edit" :size="16" />
+      <span class="grow">Восстановлен несохранённый черновик ({{ draftAge(draft.restoredAt.value) }}).</span>
+      <button type="button" class="btn sm ghost" @click="discardDraft">Сбросить черновик</button>
     </div>
 
     <form class="pf-grid" @submit.prevent="save" novalidate>
@@ -153,28 +159,23 @@
             <input type="checkbox" v-model="form.has_server" class="switch" />
           </label>
           <div v-if="form.has_server" class="opt-body">
+            <div class="field"><label>Название</label><input v-model="form.server_label" class="input" :placeholder="`Сервер: ${form.name || 'проект'}`" maxlength="200" /></div>
             <div class="grid-2">
               <div class="field"><label>Логин</label><input v-model="form.server_login" class="input" placeholder="root" autocomplete="off" /></div>
               <div class="field"><label>Пароль</label><input v-model="form.server_password" class="input" placeholder="••••••" autocomplete="off" /></div>
             </div>
-            <div class="field">
-              <label>Срок</label>
-              <div class="segmented full">
-                <button type="button" :class="{ active: form.server_days === 30 }" @click="form.server_days = 30">Месяц</button>
-                <button type="button" :class="{ active: form.server_days === 90 }" @click="form.server_days = 90">3 месяца</button>
-                <button type="button" :class="{ active: form.server_days === 365 }" @click="form.server_days = 365">Год</button>
-              </div>
-            </div>
             <div class="grid-2">
+              <div class="field"><label>Когда куплен</label><input v-model="form.server_purchase_date" type="date" class="input" :max="today" /></div>
               <div class="field"><label>Стоимость</label><MoneyInput v-model="form.server_amount" placeholder="45 000" /></div>
-              <div class="field">
-                <label>Оплачено из</label>
-                <select v-model="form.server_paid_from" class="select input">
-                  <option value="company">Деньги компании</option>
-                  <option value="fund20">{{ settings.fund1_name }}</option>
-                  <option value="fund5">{{ settings.fund2_name }}</option>
-                </select>
-              </div>
+            </div>
+            <div class="field">
+              <label>На какой срок</label>
+              <TermPicker v-model:months="form.server_months" v-model:days="form.server_days" :start="form.server_purchase_date" />
+            </div>
+            <div class="field">
+              <label>Кто платит за сервер</label>
+              <PayerPicker v-model:paid-by="form.server_paid_by" v-model:paid-from="form.server_paid_from"
+                           :amount="form.server_amount" :buckets="buckets" />
             </div>
           </div>
         </div>
@@ -206,6 +207,9 @@ import { useRoute, useRouter } from 'vue-router'
 import api, { money, errorMessage } from '../../api'
 import Icon from '../../components/Icon.vue'
 import MoneyInput from '../../components/MoneyInput.vue'
+import TermPicker from '../../components/TermPicker.vue'
+import PayerPicker from '../../components/PayerPicker.vue'
+import { useDraft, draftAge } from '../../composables/useDraft'
 
 const emit = defineEmits(['changed'])
 const route = useRoute()
@@ -222,7 +226,9 @@ const form = reactive({
   price: null, worker_amount: null, prepayment: null, prepayment_date: today,
   start_date: today, deadline_date: '', beta_date: '',
   has_monthly: false, monthly_amount: null, fund1_rate: null, fund2_rate: null,
-  has_server: false, server_login: '', server_password: '', server_days: 30, server_amount: null, server_paid_from: 'company',
+  has_server: false, server_label: '', server_login: '', server_password: '', server_purchase_date: today,
+  server_months: 12, server_days: null, server_amount: null, server_paid_by: 'company', server_paid_from: 'company',
+  own_rates: false,
 })
 const workers = ref([])
 const projects = ref([])
@@ -231,7 +237,19 @@ const loaded = ref(false)
 const saving = ref(false)
 const error = ref('')
 
-const ownRates = ref(false)
+// свои ставки — часть формы, чтобы попадали в черновик
+const ownRates = computed({ get: () => form.own_rates, set: (v) => { form.own_rates = v } })
+const finance = ref(null)
+const buckets = computed(() => [
+  { key: 'company', name: 'Деньги компании', balance: finance.value ? Number(finance.value.company.balance) : null },
+  { key: 'fund20', name: settings.value.fund1_name, balance: finance.value ? Number(finance.value.fund20.balance) : null },
+  { key: 'fund5', name: settings.value.fund2_name, balance: finance.value ? Number(finance.value.fund5.balance) : null },
+])
+
+// черновик: всё набранное сохраняется в браузере и возвращается при следующем открытии формы
+const draft = useDraft(isEdit.value ? `project:edit:${route.params.id}` : 'project:new', form,
+  { exclude: ['server_password'] })
+let initial = null
 const rates = computed(() => ({
   r1: ownRates.value && form.fund1_rate !== null && form.fund1_rate !== '' ? Number(form.fund1_rate) : Number(settings.value.fund1_rate),
   r2: ownRates.value && form.fund2_rate !== null && form.fund2_rate !== '' ? Number(form.fund2_rate) : Number(settings.value.fund2_rate),
@@ -279,6 +297,7 @@ function validate() {
   if (!form.price && !form.has_monthly) return 'Укажите цену проекта'
   if (!form.start_date || !form.deadline_date) return 'Укажите даты начала и дедлайна'
   if (form.has_monthly && !form.monthly_amount) return 'Укажите сумму ежемесячной оплаты'
+  if (!isEdit.value && form.has_server && !form.server_months && !form.server_days) return 'Укажите срок сервера'
   if (!isEdit.value && (form.prepayment || 0) > (form.price || 0)) return 'Предоплата больше цены проекта'
   if (ownRates.value && rates.value.r1 + rates.value.r2 > 100) return 'Ставки фондов в сумме не могут быть больше 100%'
   return ''
@@ -308,13 +327,16 @@ async function save() {
         prepayment_date: form.prepayment ? form.prepayment_date : null,
         has_server: form.has_server,
         ...(form.has_server && {
-          server_login: form.server_login, server_password: form.server_password,
-          server_days: form.server_days, server_amount: form.server_amount || 0,
-          server_paid_from: form.server_paid_from,
+          server_label: form.server_label.trim(), server_login: form.server_login, server_password: form.server_password,
+          server_purchase_date: form.server_purchase_date || null,
+          server_months: form.server_months || null, server_days: form.server_months ? null : form.server_days,
+          server_amount: form.server_amount || 0,
+          server_paid_by: form.server_paid_by, server_paid_from: form.server_paid_from,
         }),
       })
       id = (await api.post('/projects/', payload, { silentError: true })).data.id
     }
+    draft.clear()
     emit('changed')
     router.push(`/projects/${id}`)
   } catch (e) {
@@ -322,13 +344,20 @@ async function save() {
   } finally { saving.value = false }
 }
 
+function discardDraft() {
+  draft.clear()
+  Object.assign(form, initial)
+}
+
 function back() { router.push(isEdit.value ? `/projects/${route.params.id}` : '/projects') }
 
 onMounted(async () => {
-  const [w, p, s] = await Promise.all([api.get('/users/', { params: { role: 'worker' } }), api.get('/projects/'), api.get('/settings/')])
+  const [w, p, s, f] = await Promise.all([api.get('/users/', { params: { role: 'worker' } }), api.get('/projects/'),
+    api.get('/settings/'), api.get('/finance/')])
   workers.value = w.data
   projects.value = p.data
   settings.value = s.data
+  finance.value = f.data
   if (isEdit.value) {
     const pr = p.data.find(x => String(x.id) === String(route.params.id)) || (await api.get(`/projects/${route.params.id}/`)).data
     Object.assign(form, {
@@ -343,12 +372,16 @@ onMounted(async () => {
   } else if (workers.value.length === 1) {
     form.worker = workers.value[0].id
   }
+  initial = JSON.parse(JSON.stringify(form))
+  draft.restore()
   loaded.value = true
 })
 </script>
 
 <style scoped>
 .pf { display: flex; flex-direction: column; gap: 16px; padding-bottom: 90px; }
+.draft-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: 14px;
+  background: var(--info-bg); font-size: 14px; }
 .pf-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .pf-grid { display: grid; grid-template-columns: 1fr 1.1fr 1fr; gap: 16px; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 14px; }

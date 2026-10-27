@@ -19,7 +19,7 @@
     <div class="card tight">
       <table class="table">
         <thead>
-          <tr><th>Сервер</th><th>Логин</th><th>Проект</th><th>Действует до</th><th>Осталось</th><th>Стоимость</th><th>Оплачен из</th><th style="width:1%"></th></tr>
+          <tr><th>Сервер</th><th>Логин</th><th>Проект</th><th>Действует до</th><th>Осталось</th><th>Стоимость</th><th>Кто платил</th><th style="width:1%"></th></tr>
         </thead>
         <tbody>
           <tr v-for="s in shown" :key="s.id">
@@ -33,7 +33,7 @@
               </span>
             </td>
             <td class="mono">{{ money(s.amount) }}</td>
-            <td>{{ s.paid_from_display }}</td>
+            <td><span v-if="s.paid_by === 'client'" class="badge blue">Клиент</span><span v-else>{{ bucketName(s.paid_from) }}</span></td>
             <td>
               <div class="row gap-8" style="justify-content: flex-end; white-space: nowrap">
                 <button class="btn sm green" @click="openRenew(s)"><Icon name="renew" :size="15" /> Продлить</button>
@@ -64,55 +64,40 @@
         <div class="field"><label>Логин</label><input v-model="b.login" class="input" placeholder="root" /></div>
         <div class="field"><label>Пароль</label><input v-model="b.password" class="input" placeholder="••••••" /></div>
       </div>
-      <div class="field">
-        <label>Куплен на срок</label>
-        <div class="row gap-8 wrap">
-          <button class="btn sm" :class="{ primary: b.days == 30 }" @click="b.days = 30">Месяц</button>
-          <button class="btn sm" :class="{ primary: b.days == 365 }" @click="b.days = 365">Год</button>
-          <input v-model="b.days" type="number" class="input" style="max-width: 130px" placeholder="дней" />
-        </div>
-      </div>
       <div class="grid-2">
-        <div class="field"><label>Стоимость, ₸</label><input v-model="b.amount" type="number" class="input" placeholder="45000" /></div>
-        <div class="field">
-          <label>Оплачено из</label>
-          <select v-model="b.paid_from" class="select">
-            <option value="company">Деньги компании</option>
-            <option value="fund20">Фонд 20%</option>
-            <option value="fund5">Фонд 5%</option>
-          </select>
-        </div>
+        <div class="field"><label>Когда куплен</label><input v-model="b.purchase_date" type="date" class="input" :max="today" /></div>
+        <div class="field"><label>Стоимость</label><MoneyInput v-model="b.amount" placeholder="45 000" /></div>
       </div>
+      <div class="field">
+        <label>На какой срок</label>
+        <TermPicker v-model:months="b.months" v-model:days="b.days" :start="b.purchase_date" />
+      </div>
+      <div class="field">
+        <label>Кто платит</label>
+        <PayerPicker v-model:paid-by="b.paid_by" v-model:paid-from="b.paid_from" :amount="b.amount" :buckets="buckets" />
+      </div>
+      <div v-if="formError" class="badge red mt-8">{{ formError }}</div>
       <div class="row between mt-16">
         <button class="btn ghost" @click="buyModal = false">Отмена</button>
-        <button class="btn primary" :disabled="busy || !b.label || !b.days" @click="buy"><span v-if="busy" class="spinner"></span><span v-else>Купить</span></button>
+        <button class="btn primary" :disabled="busy || !b.label || (!b.months && !b.days)" @click="buy"><span v-if="busy" class="spinner"></span><span v-else>Купить</span></button>
       </div>
     </Modal>
 
     <!-- Продлить -->
     <Modal v-model="renewModal" eyebrow="Продление" :title="`Продлить: ${current?.label || ''}`">
       <div class="field">
-        <label>Срок продления</label>
-        <div class="row gap-8 wrap">
-          <button class="btn sm" :class="{ primary: r.days == 30 }" @click="r.days = 30">Месяц</button>
-          <button class="btn sm" :class="{ primary: r.days == 365 }" @click="r.days = 365">Год</button>
-          <input v-model="r.days" type="number" class="input" style="max-width: 130px" placeholder="дней" />
-        </div>
+        <label>Продлить на срок</label>
+        <TermPicker v-model:months="r.months" v-model:days="r.days" :start="renewStart" />
       </div>
-      <div class="grid-2">
-        <div class="field"><label>Стоимость, ₸</label><input v-model="r.amount" type="number" class="input" /></div>
-        <div class="field">
-          <label>Оплачено из</label>
-          <select v-model="r.paid_from" class="select">
-            <option value="company">Деньги компании</option>
-            <option value="fund20">Фонд 20%</option>
-            <option value="fund5">Фонд 5%</option>
-          </select>
-        </div>
+      <div class="field"><label>Стоимость</label><MoneyInput v-model="r.amount" placeholder="45 000" /></div>
+      <div class="field">
+        <label>Кто платит</label>
+        <PayerPicker v-model:paid-by="r.paid_by" v-model:paid-from="r.paid_from" :amount="r.amount" :buckets="buckets" />
       </div>
+      <div v-if="formError" class="badge red mt-8">{{ formError }}</div>
       <div class="row between mt-16">
         <button class="btn ghost" @click="renewModal = false">Отмена</button>
-        <button class="btn primary" :disabled="busy || !r.days" @click="renew"><span v-if="busy" class="spinner"></span><span v-else>Продлить</span></button>
+        <button class="btn primary" :disabled="busy || (!r.months && !r.days)" @click="renew"><span v-if="busy" class="spinner"></span><span v-else>Продлить</span></button>
       </div>
     </Modal>
 
@@ -144,20 +129,20 @@
           <div class="dt-row">
             <span><b>Покупка</b></span>
             <span class="muted mono">{{ formatDate(current.purchase_date) }}</span>
-            <span class="muted">{{ current.days }} дн.</span>
+            <span class="muted">{{ termText(current.months, current.days) }}</span>
             <span class="ta-r mono">{{ money(current.amount) }}</span>
-            <span class="muted">{{ current.paid_from_display }}</span>
+            <span class="muted">{{ current.paid_by === 'client' ? 'Клиент' : bucketName(current.paid_from) }}</span>
           </div>
           <div v-for="rn in current.renewals" :key="rn.id" class="dt-row">
             <span><b>Продление</b> <span class="muted small">до {{ formatDate(rn.new_expiry) }}</span></span>
             <span class="muted mono">{{ formatDate(rn.date) }}</span>
-            <span class="muted">+{{ rn.days }} дн.</span>
+            <span class="muted">+{{ termText(rn.months, rn.days) }}</span>
             <span class="ta-r mono">{{ money(rn.amount) }}</span>
-            <span class="muted">{{ bucketName(rn.paid_from) }}</span>
+            <span class="muted">{{ rn.paid_by === 'client' ? 'Клиент' : bucketName(rn.paid_from) }}</span>
           </div>
         </div>
         <div class="row between total-row mt-16">
-          <b>Всего вложено в сервер</b>
+          <b>Всего потрачено компанией</b>
           <b class="mono" style="font-size: 17px">{{ money(totalSpent) }}</b>
         </div>
       </div>
@@ -198,10 +183,13 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import api, { money, formatDate } from '../../api'
+import api, { money, formatDate, errorMessage } from '../../api'
 import Modal from '../../components/Modal.vue'
 import Icon from '../../components/Icon.vue'
 import FilterBar from '../../components/FilterBar.vue'
+import MoneyInput from '../../components/MoneyInput.vue'
+import TermPicker from '../../components/TermPicker.vue'
+import PayerPicker from '../../components/PayerPicker.vue'
 import { textMatch, inRange } from '../../filters'
 
 const emit = defineEmits(['changed'])
@@ -232,22 +220,48 @@ const busy = ref(false)
 const current = ref(null)
 const showPass = ref(false)
 
-const b = reactive({ label: '', project: null, login: '', password: '', days: '', amount: '', paid_from: 'company' })
-const r = reactive({ days: '', amount: '', paid_from: 'company' })
+const now = new Date()
+const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+const blankBuy = () => ({ label: '', project: null, login: '', password: '', purchase_date: today, months: 12, days: null,
+  amount: null, paid_by: 'company', paid_from: 'company' })
+const b = reactive(blankBuy())
+const r = reactive({ months: 12, days: null, amount: null, paid_by: 'company', paid_from: 'company' })
+const formError = ref('')
+const settings = ref({ fund1_name: 'Фонд 20%', fund2_name: 'Фонд 5%' })
+const finance = ref(null)
+const buckets = computed(() => [
+  { key: 'company', name: 'Деньги компании', balance: finance.value ? Number(finance.value.company.balance) : null },
+  { key: 'fund20', name: settings.value.fund1_name, balance: finance.value ? Number(finance.value.fund20.balance) : null },
+  { key: 'fund5', name: settings.value.fund2_name, balance: finance.value ? Number(finance.value.fund5.balance) : null },
+])
+// продление считается от окончания срока (или от сегодня, если сервер уже истёк)
+const renewStart = computed(() => {
+  const exp = current.value?.expiry_date
+  return exp && exp > today ? exp : today
+})
+function termText(months, days) {
+  if (months) return months % 12 === 0 ? (months === 12 ? '1 год' : `${months / 12} г.`) : `${months} мес.`
+  return `${days} дн.`
+}
 const e = reactive({ label: '', project: null, login: '', password: '' })
 
-const BUCKETS = { company: 'Деньги компании', fund20: 'Фонд 20%', fund5: 'Фонд 5%' }
-const bucketName = (k) => BUCKETS[k] || k
+const bucketName = (k) => buckets.value.find(b => b.key === k)?.name || k
 
+// сколько потратила компания (оплаченное клиентом не считается)
 const totalSpent = computed(() => {
   if (!current.value) return 0
-  const base = Number(current.value.amount || 0)
-  const rn = (current.value.renewals || []).reduce((a, x) => a + Number(x.amount || 0), 0)
-  return base + rn
+  const own = (x) => (x.paid_by === 'client' ? 0 : Number(x.amount || 0))
+  return own(current.value) + (current.value.renewals || []).reduce((a, x) => a + own(x), 0)
 })
 
-function openBuy() { Object.assign(b, { label: '', project: null, login: '', password: '', days: '', amount: '', paid_from: 'company' }); buyModal.value = true }
-function openRenew(s) { current.value = s; Object.assign(r, { days: '', amount: '', paid_from: 'company' }); renewModal.value = true }
+async function loadFinance() { finance.value = (await api.get('/finance/')).data }
+function openBuy() { Object.assign(b, blankBuy()); formError.value = ''; buyModal.value = true; loadFinance() }
+function openRenew(s) {
+  current.value = s
+  Object.assign(r, { months: s.months || 12, days: s.months ? null : null, amount: Number(s.amount) || null,
+    paid_by: s.paid_by || 'company', paid_from: s.paid_from || 'company' })
+  formError.value = ''; renewModal.value = true; loadFinance()
+}
 function openHistory(s) { current.value = s; showPass.value = false; histModal.value = true }
 function openEdit(s) { current.value = s; Object.assign(e, { label: s.label, project: s.project, login: s.login, password: s.password }); editModal.value = true }
 function openDelete(s) { current.value = s; delModal.value = true }
@@ -255,18 +269,18 @@ function openDelete(s) { current.value = s; delModal.value = true }
 function copy(text) { if (text) navigator.clipboard?.writeText(text) }
 
 async function buy() {
-  busy.value = true
+  busy.value = true; formError.value = ''
   try {
-    await api.post('/servers/', { ...b, amount: b.amount || 0, purchase_date: new Date().toISOString().slice(0, 10) })
+    await api.post('/servers/', { ...b, amount: b.amount || 0, days: b.months ? null : b.days }, { silentError: true })
     buyModal.value = false; await load(); emit('changed')
-  } finally { busy.value = false }
+  } catch (e) { formError.value = errorMessage(e) } finally { busy.value = false }
 }
 async function renew() {
-  busy.value = true
+  busy.value = true; formError.value = ''
   try {
-    await api.post(`/servers/${current.value.id}/renew/`, { ...r, amount: r.amount || 0 })
+    await api.post(`/servers/${current.value.id}/renew/`, { ...r, amount: r.amount || 0, days: r.months ? null : r.days }, { silentError: true })
     renewModal.value = false; await load(); emit('changed')
-  } finally { busy.value = false }
+  } catch (e) { formError.value = errorMessage(e) } finally { busy.value = false }
 }
 async function saveEdit() {
   busy.value = true
@@ -284,8 +298,8 @@ async function confirmDelete() {
 }
 
 async function load() {
-  const [s, p] = await Promise.all([api.get('/servers/'), api.get('/projects/')])
-  servers.value = s.data; projects.value = p.data
+  const [s, p, st] = await Promise.all([api.get('/servers/'), api.get('/projects/'), api.get('/settings/')])
+  servers.value = s.data; projects.value = p.data; settings.value = st.data
 }
 onMounted(load)
 </script>

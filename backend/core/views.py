@@ -12,19 +12,20 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .exceptions import validate_or_raise
 from .models import (
-    Bucket, GlobalSettings, Notification, Payment, PaymentKind, PlanItem, PlanPeriod, Project,
+    Bucket, Expense, ExpenseCategory, GlobalSettings, Notification, Payment, PaymentKind, PlanItem,
+    PlanPeriod, Project,
     ProjectComment, ProjectStatus, ReviewStatus, Server, ServerRenewal,
-    ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout, week_start,
+    ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout, term_end, week_start,
 )
 from .serializers import (
-    AddPaymentSerializer, CarryOverSerializer, FinishSerializer, PlanItemSerializer, GlobalSettingsSerializer, MonthlyPaymentSerializer,
+    AddPaymentSerializer, CarryOverSerializer, ExpenseSerializer, FinishSerializer, PlanItemSerializer, GlobalSettingsSerializer, MonthlyPaymentSerializer,
     MyTokenObtainPairSerializer, NotificationSerializer, ProfileSerializer, ProjectCreateSerializer,
     ProjectSerializer, RenewSerializer, ServerSerializer, SubTaskSerializer, TaskSerializer,
     UserManageSerializer, UserSerializer, WorkerPayoutCreateSerializer, WorkerProjectSerializer,
     project_serializer_for, serialize_projects,
 )
 from .services import (
-    _admins, _testers, activity_log, debts_summary, finance_breakdown, finance_summary, fund_balances,
+    _admins, _testers, activity_log, debts_summary, expense_report, finance_breakdown, finance_summary, fund_balances,
     generate_notifications, generate_task_notifications, notify_review, notify_task_assigned,
     plan_stats, refresh_server_statuses, task_report, team_plans, worker_earnings,
 )
@@ -346,15 +347,16 @@ class ServerViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def renew(self, request, pk=None):
-        """Продлить сервер на N дней, оплата из выбранной корзины."""
+        """Продлить сервер на N месяцев (или дней); платит компания из выбранной корзины или клиент."""
         server = self.get_object()
         ser = RenewSerializer(data=request.data)
         validate_or_raise(ser)
-        days, amount, paid_from = (ser.validated_data[k] for k in ('days', 'amount', 'paid_from'))
+        data = ser.validated_data
         base = max(server.expiry_date, timezone.localdate())
-        new_expiry = base + timedelta(days=days)
+        new_expiry = term_end(base, data.get('months'), data.get('days'))
         ServerRenewal.objects.create(
-            server=server, days=days, new_expiry=new_expiry, amount=amount, paid_from=paid_from)
+            server=server, months=data.get('months'), days=(new_expiry - base).days, new_expiry=new_expiry,
+            amount=data['amount'], paid_by=data['paid_by'], paid_from=data['paid_from'])
         server.expiry_date = new_expiry
         server.status = ServerStatus.ACTIVE
         server.save()
@@ -364,6 +366,52 @@ class ServerViewSet(viewsets.ModelViewSet):
 # --------------------------------------------------------------------------- #
 #  Финансы
 # --------------------------------------------------------------------------- #
+class ExpenseViewSet(viewsets.ModelViewSet):
+    """Расходы компании (только админ). Фильтры: ?from=&to=&category=&paid_from=&q=."""
+    serializer_class = ExpenseSerializer
+    permission_classes = [IsAdmin]
+
+    def get_queryset(self):
+        qs = Expense.objects.select_related('project', 'created_by')
+        p = self.request.query_params
+        start, end = _date_param(p.get('from')), _date_param(p.get('to'))
+        if start:
+            qs = qs.filter(date__gte=start)
+        if end:
+            qs = qs.filter(date__lte=end)
+        if p.get('category') in ExpenseCategory.values:
+            qs = qs.filter(category=p['category'])
+        if p.get('paid_from') in Bucket.values:
+            qs = qs.filter(paid_from=p['paid_from'])
+        if p.get('q'):
+            qs = qs.filter(Q(title__icontains=p['q']) | Q(note__icontains=p['q']))
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def categories(self, request):
+        return Response([{'value': v, 'label': l} for v, l in ExpenseCategory.choices])
+
+    @action(detail=False, methods=['get'])
+    def report(self, request):
+        """Отчёт по всем расходам за период: ?from=ГГГГ-ММ-ДД&to=ГГГГ-ММ-ДД (по умолчанию — текущий месяц)."""
+        today = timezone.localdate()
+        start = _date_param(request.query_params.get('from')) or today.replace(day=1)
+        end = _date_param(request.query_params.get('to')) or today
+        if end < start:
+            return bad_request('Конец периода раньше начала.')
+        return Response(expense_report(start, end))
+
+
+def _date_param(value):
+    try:
+        return Date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
 class DebtsView(APIView):
     """Кто сколько должен: клиенты компании и компания рабочим."""
     permission_classes = [IsAdmin]

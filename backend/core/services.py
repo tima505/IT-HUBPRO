@@ -9,7 +9,7 @@ from django.db.models import Count as models_count, Sum
 from django.utils import timezone
 
 from .models import (
-    Bucket, Notification, Payment, PaymentKind, PlanItem, PlanPeriod, Project, ProjectStatus,
+    Bucket, Expense, ExpenseCategory, Notification, Payer, Payment, PaymentKind, PlanItem, PlanPeriod, Project, ProjectStatus,
     Server, ServerRenewal, ServerStatus, SubTask, Task, TaskStatus, User, WorkerPayout, week_start,
 )
 
@@ -21,7 +21,8 @@ def _sum(qs, field) -> Decimal:
 def fund_balances() -> dict:
     """Текущие остатки трёх «корзин» денег.
 
-    Приход: распределение платежей. Расход: серверы и выплаты рабочим из выбранной корзины.
+    Приход: распределение платежей. Расход: серверы (если платит компания), выплаты рабочим
+    и расходы компании — из выбранной корзины.
     """
     payments = Payment.objects.all()
     income = {
@@ -31,12 +32,15 @@ def fund_balances() -> dict:
     }
 
     expense = {Bucket.FUND20: Decimal('0'), Bucket.FUND5: Decimal('0'), Bucket.COMPANY: Decimal('0')}
-    for bucket, total in Server.objects.values_list('paid_from').annotate(t=Sum('amount')):
-        expense[bucket] = expense.get(bucket, Decimal('0')) + (total or Decimal('0'))
-    for bucket, total in ServerRenewal.objects.values_list('paid_from').annotate(t=Sum('amount')):
-        expense[bucket] = expense.get(bucket, Decimal('0')) + (total or Decimal('0'))
-    for bucket, total in WorkerPayout.objects.values_list('paid_from').annotate(t=Sum('amount')):
-        expense[bucket] = expense.get(bucket, Decimal('0')) + (total or Decimal('0'))
+    sources = (
+        Server.objects.filter(paid_by=Payer.COMPANY),          # сервер, оплаченный клиентом, — не наш расход
+        ServerRenewal.objects.filter(paid_by=Payer.COMPANY),
+        WorkerPayout.objects.all(),
+        Expense.objects.all(),
+    )
+    for qs in sources:
+        for bucket, total in qs.values_list('paid_from').annotate(t=Sum('amount')):
+            expense[bucket] = expense.get(bucket, Decimal('0')) + (total or Decimal('0'))
 
     result = {}
     for bucket in [Bucket.FUND20, Bucket.FUND5, Bucket.COMPANY]:
@@ -73,8 +77,10 @@ def finance_summary() -> dict:
         'clients_debt': debts['clients_total'],
         'workers_debt': debts['workers_total'],
         'server_expense': (
-            _sum(Server.objects.all(), 'amount') + _sum(ServerRenewal.objects.all(), 'amount')
+            _sum(Server.objects.filter(paid_by=Payer.COMPANY), 'amount')
+            + _sum(ServerRenewal.objects.filter(paid_by=Payer.COMPANY), 'amount')
         ),
+        'other_expense': _sum(Expense.objects.all(), 'amount'),
     }
 
 
@@ -156,15 +162,18 @@ def finance_breakdown(bucket: str) -> dict:
             })
 
     expense = []
-    for s in Server.objects.filter(paid_from=bucket):
+    for s in Server.objects.filter(paid_from=bucket, paid_by=Payer.COMPANY):
         expense.append({'source': f'Сервер «{s.label}»', 'detail': 'Покупка',
                         'date': s.purchase_date, 'amount': s.amount})
-    for rn in ServerRenewal.objects.filter(paid_from=bucket).select_related('server'):
+    for rn in ServerRenewal.objects.filter(paid_from=bucket, paid_by=Payer.COMPANY).select_related('server'):
         expense.append({'source': f'Сервер «{rn.server.label}»', 'detail': 'Продление',
                         'date': rn.date, 'amount': rn.amount})
     for po in WorkerPayout.objects.filter(paid_from=bucket).select_related('worker', 'project'):
         expense.append({'source': f'Рабочему {po.worker}', 'detail': f'Выплата по «{po.project.name}»',
                         'date': po.date, 'amount': po.amount})
+    for ex in Expense.objects.filter(paid_from=bucket):
+        expense.append({'source': ex.title, 'detail': ex.get_category_display(),
+                        'date': ex.date, 'amount': ex.amount})
 
     income.sort(key=lambda x: x['date'], reverse=True)
     expense.sort(key=lambda x: x['date'], reverse=True)
@@ -216,16 +225,27 @@ def activity_log() -> list:
             (f'{po.note} · ' if po.note else '') + f'из «{po.get_paid_from_display()}»',
             po.amount, po.project)
 
+    def payer_text(obj):
+        if obj.paid_by == Payer.CLIENT:
+            return f'оплатил клиент: {obj.amount:,.0f} ₸'.replace(',', ' ')
+        return f'оплачен из: {obj.get_paid_from_display()}'
+
     for s in Server.objects.select_related('project'):
         add(f'server-{s.id}', 'server', s.purchase_date, s.created_at,
-            f'Куплен сервер «{s.label}»', f'на {s.days} дн., оплачен из: {s.get_paid_from_display()}',
-            s.amount, s.project)
+            f'Куплен сервер «{s.label}»', f'на {term_text(s.months, s.days)}, {payer_text(s)}',
+            s.amount if s.paid_by == Payer.COMPANY else None, s.project)
 
     for rn in ServerRenewal.objects.select_related('server__project'):
         add(f'renew-{rn.id}', 'server', rn.date, rn.created_at,
             f'Продлён сервер «{rn.server.label}»',
-            f'на {rn.days} дн., до {rn.new_expiry:%d.%m.%Y}, оплачен из: {rn.get_paid_from_display()}',
-            rn.amount, rn.server.project)
+            f'на {term_text(rn.months, rn.days)}, до {rn.new_expiry:%d.%m.%Y}, {payer_text(rn)}',
+            rn.amount if rn.paid_by == Payer.COMPANY else None, rn.server.project)
+
+    for ex in Expense.objects.select_related('project', 'created_by'):
+        add(f'expense-{ex.id}', 'expense', ex.date, ex.created_at,
+            f'Расход: {ex.title}', f'{ex.get_category_display()} · из «{ex.get_paid_from_display()}»'
+            + (f' · {ex.note}' if ex.note else ''),
+            ex.amount, ex.project, str(ex.created_by) if ex.created_by_id else '')
 
     for c in ProjectComment.objects.select_related('project', 'author'):
         add(f'comment-{c.id}', 'comment' if c.kind == ProjectComment.Kind.COMMENT else 'review',
@@ -575,3 +595,87 @@ def team_plans() -> list:
         })
     rows.sort(key=lambda r: (r['week_planned'] == 0, -(r['week_rate'] or 0), r['name']))
     return rows
+
+
+# --------------------------------------------------------------------------- #
+#  Отчёт по расходам
+# --------------------------------------------------------------------------- #
+def term_text(months, days) -> str:
+    if months:
+        if months % 12 == 0:
+            years = months // 12
+            return '1 год' if years == 1 else f'{years} года' if years < 5 else f'{years} лет'
+        return f'{months} мес.'
+    return f'{days} дн.'
+
+
+SERVER_CATEGORY = ('servers', 'Серверы')
+PAYOUT_CATEGORY = ('payouts', 'Выплаты рабочим')
+
+
+def expense_report(first, last) -> dict:
+    """Все расходы компании за период: ручные расходы, серверы, продления, выплаты рабочим.
+
+    Серверы, которые оплатил клиент, в итоги не входят — они в отдельном списке client_paid.
+    """
+    rows, client_paid = [], []
+
+    def row(kind, ident, date, amount, category, title, bucket, bucket_label, project=None, note=''):
+        return {'id': f'{kind}-{ident}', 'kind': kind, 'date': date, 'amount': amount,
+                'category': category[0], 'category_display': category[1], 'title': title,
+                'paid_from': bucket, 'paid_from_display': bucket_label, 'note': note,
+                'project_id': project.id if project else None, 'project_name': project.name if project else ''}
+
+    in_period = dict(date__gte=first, date__lte=last)
+    for ex in Expense.objects.filter(**in_period).select_related('project'):
+        rows.append(row('expense', ex.id, ex.date, ex.amount, (ex.category, ex.get_category_display()),
+                        ex.title, ex.paid_from, ex.get_paid_from_display(), ex.project, ex.note))
+    for s in Server.objects.filter(purchase_date__gte=first, purchase_date__lte=last).select_related('project'):
+        r = row('server', s.id, s.purchase_date, s.amount, SERVER_CATEGORY, f'Покупка сервера «{s.label}»',
+                s.paid_from, s.get_paid_from_display(), s.project, f'на {term_text(s.months, s.days)}')
+        (client_paid if s.paid_by == Payer.CLIENT else rows).append(r)
+    for rn in ServerRenewal.objects.filter(**in_period).select_related('server__project'):
+        r = row('renewal', rn.id, rn.date, rn.amount, SERVER_CATEGORY, f'Продление сервера «{rn.server.label}»',
+                rn.paid_from, rn.get_paid_from_display(), rn.server.project, f'на {term_text(rn.months, rn.days)}')
+        (client_paid if rn.paid_by == Payer.CLIENT else rows).append(r)
+    for po in WorkerPayout.objects.filter(**in_period).select_related('worker', 'project'):
+        rows.append(row('payout', po.id, po.date, po.amount, PAYOUT_CATEGORY, f'Выплата: {po.worker}',
+                        po.paid_from, po.get_paid_from_display(), po.project, po.note))
+
+    rows.sort(key=lambda r: (r['date'], r['id']), reverse=True)
+    client_paid.sort(key=lambda r: r['date'], reverse=True)
+    total = sum((r['amount'] for r in rows), Decimal('0'))
+
+    def group(key, label_key):
+        out = {}
+        for r in rows:
+            g = out.setdefault(r[key], {'key': r[key], 'label': r[label_key], 'amount': Decimal('0'), 'count': 0})
+            g['amount'] += r['amount']
+            g['count'] += 1
+        return sorted(out.values(), key=lambda g: -g['amount'])
+
+    by_month = {}
+    for r in rows:
+        k = f"{r['date']:%Y-%m}"
+        by_month[k] = by_month.get(k, Decimal('0')) + r['amount']
+    months, d = [], first.replace(day=1)
+    while d <= last:
+        k = f'{d:%Y-%m}'
+        months.append({'month': k, 'amount': by_month.get(k, Decimal('0'))})
+        d = add_months_simple(d)
+
+    return {
+        'from': first, 'to': last,
+        'total': total, 'count': len(rows),
+        'by_category': group('category', 'category_display'),
+        'by_fund': group('paid_from', 'paid_from_display'),
+        'by_month': months,
+        'rows': rows,
+        'client_paid': client_paid,
+        'client_paid_total': sum((r['amount'] for r in client_paid), Decimal('0')),
+    }
+
+
+def add_months_simple(d):
+    """Первое число следующего месяца."""
+    return date(d.year + d.month // 12, d.month % 12 + 1, 1)
